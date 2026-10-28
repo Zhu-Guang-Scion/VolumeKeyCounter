@@ -48,6 +48,9 @@ interface CounterDao {
     @Query("DELETE FROM count_events WHERE counterId = :counterId")
     suspend fun deleteEventsOfCounter(counterId: Long)
 
+    @Query("DELETE FROM checkpoints WHERE counterId = :counterId")
+    suspend fun deleteCheckpointsOfCounter(counterId: Long)
+
     @Query("SELECT * FROM checkpoints WHERE counterId = :counterId ORDER BY createdAt ASC, id ASC")
     suspend fun getAllCheckpoints(counterId: Long): List<Checkpoint>
 

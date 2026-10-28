@@ -41,7 +41,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volumekey.counter.data.Checkpoint
@@ -64,9 +66,11 @@ fun CounterScreen(
     onSaveCheckpoint: (String) -> Unit,
     onRollback: (Checkpoint) -> Unit,
     onDeleteCheckpoint: (Checkpoint) -> Unit,
+    onReset: () -> Unit,
     defaultCheckpointName: () -> String
 ) {
     var showSaveDialog by rememberSaveable { mutableStateOf(false) }
+    var showResetDialog by rememberSaveable { mutableStateOf(false) }
     var rollbackTarget by remember { mutableStateOf<Checkpoint?>(null) }
     var deleteTarget by remember { mutableStateOf<Checkpoint?>(null) }
 
@@ -206,6 +210,14 @@ fun CounterScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f)
                 )
+                TextButton(
+                    onClick = { showResetDialog = true },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("复位")
+                }
                 Button(onClick = { showSaveDialog = true }) {
                     Text("存为检查点")
                 }
@@ -213,15 +225,17 @@ fun CounterScreen(
 
             val checkpoints = uiState.checkpoints
             if (checkpoints.isEmpty()) {
-                Text(
-                    "暂无检查点。计数过程中可随时保存当前计数为命名检查点，用于核对与回退。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "暂无检查点。计数过程中可随时保存当前计数为命名检查点，用于核对与回退。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = 16.dp)
+                    contentPadding = PaddingValues(bottom = 8.dp)
                 ) {
                     items(checkpoints, key = { it.id }) { cp ->
                         CheckpointRow(
@@ -232,6 +246,17 @@ fun CounterScreen(
                     }
                 }
             }
+
+            // 页脚水印
+            Text(
+                "code by 逐光",
+                fontSize = 11.sp,
+                color = Color(0xFFB3B3B3),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 10.dp)
+            )
         }
     }
 
@@ -262,6 +287,35 @@ fun CounterScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showSaveDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showResetDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetDialog = false },
+            title = { Text("复位计数器") },
+            text = {
+                Text(
+                    "将执行以下操作：\n" +
+                        "① 计数归零（当前 ${uiState.counter?.value ?: 0L} → 0）\n" +
+                        "② 清空本计数器的 ${uiState.checkpoints.size} 个检查点\n\n" +
+                        "事件日志将完整保留（含本次复位记录）。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onReset()
+                        showResetDialog = false
+                    },
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("确认复位") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetDialog = false }) { Text("取消") }
             }
         )
     }

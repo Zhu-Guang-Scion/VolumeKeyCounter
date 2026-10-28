@@ -86,6 +86,14 @@ class CounterViewModel(
         viewModelScope.launch { repo.deleteCheckpoint(checkpoint) }
     }
 
+    /** 复位当前计数器：归零 + 清空检查点，日志留痕 */
+    fun resetCounter() {
+        viewModelScope.launch {
+            val id = ensureCounter()
+            repo.resetCounter(id)
+        }
+    }
+
     fun defaultCheckpointName(existing: Int): String = "检查点 ${existing + 1}"
 
     // ---- 多计数器管理 ----

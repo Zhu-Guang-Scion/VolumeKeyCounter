@@ -66,6 +66,23 @@ class CounterRepository(
         dao.deleteCounter(counter.id)
     }
 
+    /** 复位：计数归零并清空本计数器检查点；事件日志完整保留，复位动作本身也留痕 */
+    suspend fun resetCounter(counterId: Long) = db.withTransaction {
+        val c = dao.getCounter(counterId) ?: return@withTransaction
+        val now = System.currentTimeMillis()
+        dao.updateCounterValue(counterId, 0L, now)
+        dao.deleteCheckpointsOfCounter(counterId)
+        dao.insertEvent(
+            CountEvent(
+                counterId = counterId,
+                delta = -c.value,
+                valueAfter = 0L,
+                timestamp = now,
+                source = SOURCE_RESET
+            )
+        )
+    }
+
     suspend fun getAllCheckpoints(counterId: Long) = dao.getAllCheckpoints(counterId)
 
     suspend fun getAllEvents(counterId: Long) = dao.getAllEvents(counterId)
@@ -76,5 +93,6 @@ class CounterRepository(
         const val SOURCE_BUTTON = "button"
         const val SOURCE_POCKET = "pocket"
         const val SOURCE_ROLLBACK = "rollback"
+        const val SOURCE_RESET = "reset"
     }
 }

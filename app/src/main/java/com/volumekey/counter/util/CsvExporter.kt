@@ -28,6 +28,7 @@ object CsvExporter {
         "button" -> "屏幕按钮"
         "pocket" -> "口袋模式"
         "rollback" -> "回退"
+        "reset" -> "复位"
         else -> source
     }
 

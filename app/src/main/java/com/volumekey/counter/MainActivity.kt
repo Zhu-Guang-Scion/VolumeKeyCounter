@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
                     onSaveCheckpoint = viewModel::saveCheckpoint,
                     onRollback = viewModel::rollback,
                     onDeleteCheckpoint = viewModel::deleteCheckpoint,
+                    onReset = viewModel::resetCounter,
                     defaultCheckpointName = { viewModel.defaultCheckpointName(uiState.checkpoints.size) }
                 )
 
