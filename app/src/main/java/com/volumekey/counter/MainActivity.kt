@@ -1,0 +1,309 @@
+package com.volumekey.counter
+
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.KeyEvent
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
+import com.volumekey.counter.data.AppDatabase
+import com.volumekey.counter.data.CounterCoordinator
+import com.volumekey.counter.data.CounterRepository
+import com.volumekey.counter.data.SettingsStore
+import com.volumekey.counter.oem.OemKeepAlive
+import com.volumekey.counter.service.CountingService
+import com.volumekey.counter.service.PocketModeState
+import com.volumekey.counter.ui.CounterScreen
+import com.volumekey.counter.ui.CounterViewModel
+import com.volumekey.counter.ui.CounterViewModelFactory
+import com.volumekey.counter.ui.CountersManagerDialog
+import com.volumekey.counter.ui.theme.VolumeCounterTheme
+import com.volumekey.counter.util.CsvExporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class MainActivity : ComponentActivity() {
+
+    private val viewModel: CounterViewModel by viewModels { CounterViewModelFactory(applicationContext) }
+    private val settings by lazy { SettingsStore(applicationContext) }
+
+    private val keepScreenOnState = mutableStateOf(false)
+    private var longPressHintShown = false
+    private val showCountersManager = mutableStateOf(false)
+    private val showKeepAliveGuide = mutableStateOf(false)
+    private var startPocketWhenResumed = false
+
+    private val requestNotifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            startPocketServiceSafely()
+            if (!granted) toast("未授予通知权限：仍可计数，但通知栏不显示当前数值")
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            VolumeCounterTheme {
+                val uiState by viewModel.uiState.collectAsState()
+                val pocketRunning by PocketModeState.isRunning.collectAsState()
+                val allCounters by viewModel.allCounters.collectAsState()
+
+                CounterScreen(
+                    uiState = uiState,
+                    keepScreenOn = keepScreenOnState.value,
+                    pocketRunning = pocketRunning,
+                    onToggleKeepScreenOn = ::toggleKeepScreenOn,
+                    onTogglePocketMode = ::togglePocketMode,
+                    onShareSummary = ::shareSummary,
+                    onOpenCounters = { showCountersManager.value = true },
+                    onAdjust = ::adjustCount,
+                    onSaveCheckpoint = viewModel::saveCheckpoint,
+                    onRollback = viewModel::rollback,
+                    onDeleteCheckpoint = viewModel::deleteCheckpoint,
+                    defaultCheckpointName = { viewModel.defaultCheckpointName(uiState.checkpoints.size) }
+                )
+
+                if (showCountersManager.value) {
+                    CountersManagerDialog(
+                        counters = allCounters,
+                        activeCounterId = uiState.counter?.id,
+                        onDismiss = { showCountersManager.value = false },
+                        onSwitch = viewModel::switchCounter,
+                        onCreate = viewModel::createCounter,
+                        onRename = viewModel::renameCounter,
+                        onDelete = viewModel::deleteCounter,
+                        onExportCsv = ::exportCsv,
+                        onShowKeepAliveGuide = { showKeepAliveGuide.value = true }
+                    )
+                }
+
+                if (showKeepAliveGuide.value) {
+                    KeepAliveGuideDialog(
+                        onDismiss = { showKeepAliveGuide.value = false },
+                        onOpenSettings = {
+                            showKeepAliveGuide.value = false
+                            OemKeepAlive.openAppDetails(this)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * 前台音量键计数：App 可见时拦截音量上/下键（计 1 次并消费，系统音量不变）。
+     * 长按连发事件同样被消费但不重复计数——口袋模式开启时若把连发交回系统，
+     * 会被 MediaSession 路由回本应用的 VolumeProvider 造成连计（P0 修复）。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    if (event.repeatCount == 0) {
+                        longPressHintShown = false
+                        val up = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
+                        adjustCount(if (up) +1 else -1, if (up) CounterRepository.SOURCE_VOLUME_UP else CounterRepository.SOURCE_VOLUME_DOWN)
+                    } else if (!longPressHintShown) {
+                        longPressHintShown = true
+                        toast("长按不重复计数，仅计 1 次")
+                    }
+                    return true // 消费（含连发），系统音量不变化
+                } else if (event.action == KeyEvent.ACTION_UP) {
+                    longPressHintShown = false
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun adjustCount(delta: Int, source: String) {
+        vibrateTick()
+        viewModel.adjust(delta, source)
+    }
+
+    private fun toggleKeepScreenOn() {
+        keepScreenOnState.value = !keepScreenOnState.value
+        if (keepScreenOnState.value) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        toast(if (keepScreenOnState.value) "屏幕常亮：已开启" else "屏幕常亮：已关闭")
+    }
+
+    private fun togglePocketMode() {
+        if (PocketModeState.isRunning.value) {
+            CountingService.stop(this)
+            toast("口袋模式已结束")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startPocketServiceSafely()
+        }
+    }
+
+    /**
+     * 安全启动口袋模式：Android 12+ 禁止从后台启动前台服务，
+     * 权限回调等场景 Activity 可能已非前台，此时挂起待恢复后补启动。
+     * @return true=已立即启动
+     */
+    private fun startPocketServiceSafely(): Boolean {
+        val resumed = lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        if (resumed) {
+            return try {
+                CountingService.start(this)
+                toast("口袋模式已开启：熄屏/锁屏后音量键继续计数")
+                maybeShowKeepAliveHint()
+                true
+            } catch (e: Exception) {
+                startPocketWhenResumed = true
+                toast("即将开启口袋模式…")
+                false
+            }
+        }
+        startPocketWhenResumed = true
+        return false
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        if (startPocketWhenResumed && !PocketModeState.isRunning.value) {
+            startPocketWhenResumed = false
+            try {
+                CountingService.start(this)
+                toast("口袋模式已开启：熄屏/锁屏后音量键继续计数")
+                maybeShowKeepAliveHint()
+            } catch (_: Exception) {
+                toast("口袋模式启动失败，请回到应用内重试")
+            }
+        }
+    }
+
+    /** 首次开启口袋模式时弹一次厂商保活指引 */
+    private fun maybeShowKeepAliveHint() {
+        lifecycleScope.launch {
+            if (!settings.keepAliveHintShown.first()) {
+                settings.setKeepAliveHintShown()
+                showKeepAliveGuide.value = true
+            }
+        }
+    }
+
+    private fun shareSummary() {
+        val state = viewModel.uiState.value
+        val counter = state.counter
+        val fmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+        val sb = StringBuilder()
+        sb.append("【音量键计数器】").append(counter?.name ?: "计数器").append('\n')
+        sb.append("当前计数：").append(counter?.value ?: 0L).append('\n')
+        if (state.checkpoints.isNotEmpty()) {
+            sb.append("检查点（${state.checkpoints.size} 个）：")
+            state.checkpoints.forEachIndexed { i, cp ->
+                sb.append("\n${i + 1}. ${cp.name} —— ${cp.value} · ${fmt.format(Date(cp.createdAt))}")
+            }
+            sb.append('\n')
+        }
+        sb.append("导出时间：").append(fmt.format(Date()))
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, sb.toString())
+        }
+        startActivity(Intent.createChooser(intent, "分享计数汇总"))
+    }
+
+    private fun exportCsv() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val db = AppDatabase.getInstance(applicationContext)
+                val repo = CounterRepository(db, db.counterDao())
+                val id = CounterCoordinator.ensureActiveCounter(applicationContext)
+                val counter = repo.getCounter(id) ?: return@launch
+                val csv = CsvExporter.buildCsv(counter, repo.getAllCheckpoints(id), repo.getAllEvents(id))
+                val fileName = CsvExporter.fileName(counter.name)
+                val saved = CsvExporter.saveToDownloads(applicationContext, fileName, csv)
+                withContext(Dispatchers.Main) {
+                    if (saved != null) {
+                        toast("已导出：$saved")
+                    } else if (!CsvExporter.shareAsFile(this@MainActivity, fileName, csv)) {
+                        toast("导出失败")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { toast("导出失败：${e.message}") }
+            }
+        }
+    }
+
+    private fun vibrateTick() {
+        val vibrator = getSystemService(Vibrator::class.java) ?: return
+        val effect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)
+        } else {
+            VibrationEffect.createOneShot(20L, VibrationEffect.DEFAULT_AMPLITUDE)
+        }
+        vibrator.vibrate(effect)
+    }
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun KeepAliveGuideDialog(
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("让口袋模式更稳定（${OemKeepAlive.brandName()}）") },
+        text = {
+            Column {
+                OemKeepAlive.steps().forEach { step ->
+                    Text("• $step", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "完成设置后，长时间熄屏计数更可靠；不做设置通常也能用，但个别系统可能中途休眠。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onOpenSettings) { Text("去应用设置") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("知道了") } }
+    )
+}
