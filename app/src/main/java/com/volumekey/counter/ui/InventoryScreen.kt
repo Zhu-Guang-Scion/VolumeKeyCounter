@@ -52,8 +52,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.volumekey.counter.data.InventoryItem
 import com.volumekey.counter.service.CountRouting
 
@@ -81,6 +79,7 @@ fun InventoryScreen(
 
     BackHandler(enabled = true) { onClose() }
 
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -219,6 +218,18 @@ fun InventoryScreen(
         }
     }
 
+    // 全屏盘点计数（覆盖层而非 Dialog 窗口——保证音量键仍走 Activity 的 dispatchKeyEvent）
+    countingItem?.let { item ->
+        val live = items.firstOrNull { it.id == item.id } ?: item
+        ItemCountingOverlay(
+            item = live,
+            onAdjust = { vm.adjust(live.id, it) },
+            onEdit = { editingItem = live },
+            onDismiss = { countingItem = null }
+        )
+    }
+    } // Box end
+
     // 手动编辑（实盘数量 + 备注）
     editingItem?.let { item ->
         EditItemDialog(
@@ -228,18 +239,6 @@ fun InventoryScreen(
                 vm.setCountedAndRemark(item.id, counted, remark)
                 editingItem = null
             }
-        )
-    }
-
-    // 全屏盘点计数
-    countingItem?.let { item ->
-        // 用最新数据渲染（列表 Flow 持续刷新）
-        val live = items.firstOrNull { it.id == item.id } ?: item
-        ItemCountingDialog(
-            item = live,
-            onAdjust = { vm.adjust(live.id, it) },
-            onEdit = { editingItem = live },
-            onDismiss = { countingItem = null }
         )
     }
 
@@ -302,7 +301,7 @@ private fun InventoryRow(
                     )
                 }
                 Text(
-                    "账面 ${item.expectedQty}　差异 ${diff}",
+                    if (item.touched) "账面 ${item.expectedQty}　差异 ${diff}" else "账面 ${item.expectedQty}　未盘",
                     fontSize = 16.sp,
                     color = diffColor
                 )
@@ -328,9 +327,9 @@ private fun InventoryRow(
     }
 }
 
-/** 全屏盘点计数页：音量键直接计入当前条目 */
+/** 全屏盘点计数覆盖层：音量键直接计入当前条目（Activity 窗口内，非 Dialog） */
 @Composable
-private fun ItemCountingDialog(
+private fun ItemCountingOverlay(
     item: InventoryItem,
     onAdjust: (Int) -> Unit,
     onEdit: () -> Unit,
@@ -346,13 +345,14 @@ private fun ItemCountingDialog(
     val diff = item.countedQty - item.expectedQty
     val diffColor = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            Modifier
-                .fillMaxSize()
-                .padding(18.dp),
-            shape = MaterialTheme.shapes.large
-        ) {
+    Surface(
+        Modifier
+            .fillMaxSize()
+            .padding(18.dp),
+        shape = MaterialTheme.shapes.large,
+        shadowElevation = 8.dp,
+        tonalElevation = 8.dp
+    ) {
             Column(
                 Modifier
                     .fillMaxSize()
@@ -435,7 +435,6 @@ private fun ItemCountingDialog(
                 )
             }
         }
-    }
 }
 
 @Composable
