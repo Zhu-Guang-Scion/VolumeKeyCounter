@@ -31,8 +31,7 @@ object CsvExporter {
         "reset" -> "复位"
         else -> source
     }
-
-    fun buildCsv(counter: Counter, checkpoints: List<Checkpoint>, events: List<CountEvent>): String {
+    fun buildCsv(counter: Counter, checkpoints: List<Checkpoint>): String {
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val sb = StringBuilder()
         sb.append("音量键计数器 导出\n\n")
@@ -41,11 +40,6 @@ object CsvExporter {
         sb.append("[检查点]\n序号,名称,计数值,保存时间\n")
         checkpoints.forEachIndexed { i, cp ->
             sb.append("${i + 1},${csv(cp.name)},${cp.value},${csv(fmt.format(Date(cp.createdAt)))}\n")
-        }
-        sb.append("\n[事件明细]\n序号,时间,变化,计数后,来源\n")
-        events.forEachIndexed { i, e ->
-            val delta = if (e.delta > 0) "+${e.delta}" else "${e.delta}"
-            sb.append("${i + 1},${csv(fmt.format(Date(e.timestamp)))},${delta},${e.valueAfter},${csv(sourceName(e.source))}\n")
         }
         sb.append("\n导出时间,${csv(fmt.format(Date()))}\n")
         return sb.toString()
@@ -73,11 +67,10 @@ object CsvExporter {
         else -> s
     }
 
-    /** 盘点结果导出：清单概要 + 条目表 + 变更明细（含手动下调/清零等回退复位式记录） */
+    /** 盘点结果导出（简洁版）：清单概要 + 条目表 */
     fun buildInventoryCsv(
         list: com.volumekey.counter.data.InventoryList,
-        items: List<com.volumekey.counter.data.InventoryItem>,
-        events: List<com.volumekey.counter.data.InventoryEvent>
+        items: List<com.volumekey.counter.data.InventoryItem>
     ): String {
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val touchedCount = items.count { it.touched }
@@ -93,18 +86,19 @@ object CsvExporter {
                     "${if (it.touched) d.toString() else ""},${if (it.touched) "是" else "否"},${csv(it.remark)}\n"
             )
         }
-        if (events.isNotEmpty()) {
-            sb.append("\n[变更明细] 序号,条目,时间,变化,变更后,来源\n")
-            val nameMap = items.associate { it.id to it.name }
-            events.forEachIndexed { i, e ->
-                val delta = if (e.delta > 0) "+${e.delta}" else "${e.delta}"
-                sb.append(
-                    "${i + 1},${csv(nameMap[e.itemId] ?: "?")},${csv(fmt.format(Date(e.timestamp)))},$delta,${e.valueAfter},${csv(invSourceName(e.source))}\n"
-                )
-            }
-        }
         sb.append("\n导出时间,${csv(fmt.format(Date()))}\n")
         return sb.toString()
+    }
+
+    /**
+     * 导出并立即唤起转发：文件写入 Download（Android 10+，留档），
+     * 同时拉起系统分享面板供直接转发（微信/QQ/邮件等）。
+     * @return Download 存档路径；null 表示未能在 Download 留档（分享仍已发起）
+     */
+    fun exportThenShare(context: Context, fileName: String, content: String): String? {
+        val saved = saveToDownloads(context, fileName, content)
+        shareAsFile(context, fileName, content)
+        return saved
     }
 
     /** @return 成功时返回提示路径文案；失败返回 null（调用方走分享兜底） */
@@ -142,8 +136,12 @@ object CsvExporter {
                 type = "text/csv"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                // applicationContext 发起分享必须带 NEW_TASK，否则静默抛异常
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(Intent.createChooser(intent, "导出/分享 CSV"))
+            val chooser = Intent.createChooser(intent, "导出/分享 CSV")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // createChooser 会生成新 Intent，标志必须加在外层
+            context.startActivity(chooser)
             true
         } catch (_: Exception) {
             false

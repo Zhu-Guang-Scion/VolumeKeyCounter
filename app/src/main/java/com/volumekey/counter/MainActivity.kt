@@ -345,16 +345,14 @@ class MainActivity : ComponentActivity() {
                 val list = repo.observeInventoryLists().first().firstOrNull { it.id == listId }
                     ?: throw IllegalStateException("清单不存在")
                 val items = repo.observeInventoryItems(listId).first()
-                val events = repo.getInventoryEventsOfList(listId)
-                val csvText = CsvExporter.buildInventoryCsv(list, items, events)
+                val csvText = CsvExporter.buildInventoryCsv(list, items)
                 val fileName = CsvExporter.inventoryFileName(list.name)
-                val saved = CsvExporter.saveToDownloads(applicationContext, fileName, csvText)
+                val saved = CsvExporter.exportThenShare(applicationContext, fileName, csvText)
                 withContext(Dispatchers.Main) {
-                    if (saved != null) {
-                        toast("已导出到 下载 文件夹：$saved（可用 Excel/WPS 打开）")
-                    } else if (!CsvExporter.shareAsFile(this@MainActivity, fileName, csvText)) {
-                        toast("导出失败")
-                    }
+                    toast(
+                        if (saved != null) "已导出（留档：下载/$fileName），请选择转发目标"
+                        else "已生成文件，请选择转发目标"
+                    )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { toast("导出失败：${e.message}") }
@@ -362,21 +360,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun exportCsv() {        lifecycleScope.launch(Dispatchers.IO) {
+    private fun exportCsv() {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val db = AppDatabase.getInstance(applicationContext)
                 val repo = CounterRepository(db, db.counterDao())
                 val id = CounterCoordinator.ensureActiveCounter(applicationContext)
                 val counter = repo.getCounter(id) ?: return@launch
-                val csv = CsvExporter.buildCsv(counter, repo.getAllCheckpoints(id), repo.getAllEvents(id))
+                val csv = CsvExporter.buildCsv(counter, repo.getAllCheckpoints(id))
                 val fileName = CsvExporter.fileName(counter.name)
-                val saved = CsvExporter.saveToDownloads(applicationContext, fileName, csv)
+                val saved = CsvExporter.exportThenShare(applicationContext, fileName, csv)
                 withContext(Dispatchers.Main) {
-                    if (saved != null) {
-                        toast("已导出：$saved")
-                    } else if (!CsvExporter.shareAsFile(this@MainActivity, fileName, csv)) {
-                        toast("导出失败")
-                    }
+                    toast(
+                        if (saved != null) "已导出（留档：下载/$fileName），请选择转发目标"
+                        else "已生成文件，请选择转发目标"
+                    )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { toast("导出失败：${e.message}") }
