@@ -76,3 +76,23 @@ data class InventoryItem(
     val touched: Boolean = false,
     val remark: String = ""
 )
+
+/** 清单盘点：实盘数变更流水（音量键/屏幕按钮/手动修改/标记未盘全部留痕） */
+@Entity(
+    tableName = "inventory_events",
+    foreignKeys = [ForeignKey(
+        entity = InventoryItem::class,
+        parentColumns = ["id"],
+        childColumns = ["itemId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("itemId")]
+)
+data class InventoryEvent(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val itemId: Long,
+    val delta: Long,
+    val valueAfter: Long,
+    val timestamp: Long = System.currentTimeMillis(),
+    val source: String // volume / screen / manual
+)

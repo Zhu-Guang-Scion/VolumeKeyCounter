@@ -13,19 +13,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,19 +68,23 @@ fun InventoryScreen(
     onClose: () -> Unit,
     onImportClicked: () -> Unit,
     onTemplateClicked: () -> Unit,
-    toastMsg: String?
+    onExportClicked: () -> Unit
 ) {
     val lists by vm.lists.collectAsState()
     val items by vm.items.collectAsState()
     val summary by vm.summary.collectAsState()
     val activeListId by vm.activeListId.collectAsState()
-    var search by rememberSaveable { mutableStateOf(vm.searchQuery.value) }
+    val currentFilter by vm.filter.collectAsState()
+    val search by vm.searchQuery.collectAsState()
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var countingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var deleteListConfirm by rememberSaveable { mutableStateOf(false) }
+    var showFormatHelp by rememberSaveable { mutableStateOf(false) }
 
-    LaunchedEffect(search) { vm.searchQuery.value = search }
-    LaunchedEffect(toastMsg) { /* 提示由 Activity Toast 呈现 */ }
+    DisposableEffect(Unit) {
+        CountRouting.boardOpen.value = true
+        onDispose { CountRouting.boardOpen.value = false }
+    }
 
     BackHandler(enabled = true) { onClose() }
 
@@ -90,8 +99,14 @@ fun InventoryScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onExportClicked) {
+                        Icon(Icons.Filled.SaveAlt, contentDescription = "导出盘点结果")
+                    }
+                    IconButton(onClick = { showFormatHelp = true }) {
+                        Icon(Icons.Filled.HelpOutline, contentDescription = "导入格式说明")
+                    }
                     IconButton(onClick = onImportClicked) {
-                        Icon(Icons.Filled.FileUpload, contentDescription = "导入CSV清单")
+                        Icon(Icons.Filled.TableChart, contentDescription = "导入CSV清单")
                     }
                     IconButton(onClick = { deleteListConfirm = true }) {
                         Icon(Icons.Filled.Delete, contentDescription = "删除当前清单")
@@ -126,28 +141,63 @@ fun InventoryScreen(
                 }
             }
 
-            // 检索框（大字）
+            // 检索框（大字，带一键清空）
             OutlinedTextField(
                 value = search,
-                onValueChange = { search = it },
+                onValueChange = { vm.searchQuery.value = it },
                 singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 19.sp),
                 placeholder = { Text("按名称检索…", fontSize = 19.sp) },
+                trailingIcon = {
+                    if (search.isNotEmpty()) {
+                        IconButton(onClick = { vm.searchQuery.value = "" }) {
+                            Icon(Icons.Filled.Close, contentDescription = "清空检索")
+                        }
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // 汇总条
+            // 筛选标签页（带数量，替代纯文字汇总条）
             Spacer(Modifier.height(8.dp))
-            Surface(
-                shape = MaterialTheme.shapes.small,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "共 ${summary.total} 项　·　已盘 ${summary.touched}　·　差异 ${summary.diff}",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                FilterChip(
+                    modifier = Modifier.height(40.dp),
+                    selected = currentFilter == InventoryFilter.ALL,
+                    onClick = { vm.setFilter(InventoryFilter.ALL) },
+                    label = { Text("全部 ${summary.total}", fontSize = 16.sp) }
+                )
+                Spacer(Modifier.width(6.dp))
+                FilterChip(
+                    modifier = Modifier.height(40.dp),
+                    selected = currentFilter == InventoryFilter.UNTOUCHED,
+                    onClick = { vm.setFilter(InventoryFilter.UNTOUCHED) },
+                    label = { Text("未盘 ${summary.untouched}", fontSize = 16.sp) }
+                )
+                Spacer(Modifier.width(6.dp))
+                FilterChip(
+                    modifier = Modifier.height(40.dp),
+                    selected = currentFilter == InventoryFilter.TOUCHED,
+                    onClick = { vm.setFilter(InventoryFilter.TOUCHED) },
+                    label = { Text("已盘 ${summary.touched}", fontSize = 16.sp) }
+                )
+                Spacer(Modifier.width(6.dp))
+                FilterChip(
+                    modifier = Modifier.height(40.dp),
+                    selected = currentFilter == InventoryFilter.DIFF,
+                    onClick = { vm.setFilter(InventoryFilter.DIFF) },
+                    label = {
+                        Text(
+                            "差异 ${summary.diff}",
+                            fontSize = 16.sp,
+                            color = if (summary.diff > 0) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified
+                        )
+                    }
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -178,7 +228,7 @@ fun InventoryScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onTemplateClicked, modifier = Modifier.height(48.dp)) {
-                        Text("生成模板到 Download", fontSize = 17.sp)
+                        Text("生成模板表格（存到 下载/Download）", fontSize = 17.sp)
                     }
                 }
             } else if (items.isEmpty()) {
@@ -221,16 +271,21 @@ fun InventoryScreen(
     // 全屏盘点计数（覆盖层而非 Dialog 窗口——保证音量键仍走 Activity 的 dispatchKeyEvent）
     countingItem?.let { item ->
         val live = items.firstOrNull { it.id == item.id } ?: item
+        val idx = items.indexOfFirst { it.id == live.id }
+        val nextUntouched = items.drop(idx + 1).firstOrNull { !it.touched }
+            ?: items.take(idx).firstOrNull { !it.touched }
         ItemCountingOverlay(
             item = live,
-            onAdjust = { vm.adjust(live.id, it) },
+            onAdjust = { vm.adjust(live.id, it, com.volumekey.counter.data.CounterRepository.INVENTORY_SOURCE_SCREEN) },
             onEdit = { editingItem = live },
-            onDismiss = { countingItem = null }
+            onDismiss = { countingItem = null },
+            onNext = { nextUntouched?.let { countingItem = it } },
+            hasNext = nextUntouched != null
         )
     }
     } // Box end
 
-    // 手动编辑（实盘数量 + 备注）
+    // 手动编辑（实盘数量 + 备注 + 标记未盘）
     editingItem?.let { item ->
         EditItemDialog(
             item = item,
@@ -238,7 +293,36 @@ fun InventoryScreen(
             onSave = { counted, remark ->
                 vm.setCountedAndRemark(item.id, counted, remark)
                 editingItem = null
+            },
+            onMarkUntouched = {
+                vm.markUntouched(item.id)
+                editingItem = null
             }
+        )
+    }
+
+    if (showFormatHelp) {
+        AlertDialog(
+            onDismissRequest = { showFormatHelp = false },
+            title = { Text("清单 CSV 格式说明") },
+            text = {
+                Text(
+                    "用 Excel 做一张表，第一行为表头，包含五列：\n\n" +
+                        "① 盘点对象名称（必填）\n" +
+                        "② 自定义列（规格/型号等，可留空）\n" +
+                        "③ 盘点对象数量（账面数）\n" +
+                        "④ 实际盘点数量（可先填 0 或留空）\n" +
+                        "⑤ 备注\n\n" +
+                        "列顺序可以打乱（按表头名识别）；\n" +
+                        "「另存为 CSV」后导入，UTF-8 / GBK 编码均可。\n\n" +
+                        "示例：\n" +
+                        "盘点对象名称,自定义列,盘点对象数量,实际盘点数量,备注\n" +
+                        "A区货架,规格X1,100,0,\n" +
+                        "B区托盘,规格X2,24,0,待核对",
+                    lineHeight = 24.sp
+                )
+            },
+            confirmButton = { TextButton(onClick = { showFormatHelp = false }) { Text("知道了") } }
         )
     }
 
@@ -290,7 +374,7 @@ private fun InventoryRow(
                     )
                     if (item.touched) {
                         Spacer(Modifier.width(6.dp))
-                        Badge { Text("已盘", fontSize = 11.sp) }
+                        Badge { Text("已盘", fontSize = 13.sp) }
                     }
                 }
                 if (item.customField.isNotBlank()) {
@@ -313,15 +397,17 @@ private fun InventoryRow(
                     )
                 }
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable(onClick = onEdit)
+            ) {
                 Text(
                     item.countedQty.toString(),
                     fontSize = 30.sp,
                     fontWeight = FontWeight.Bold,
-                    color = diffColor,
-                    modifier = Modifier.clickable(onClick = onEdit)
+                    color = diffColor
                 )
-                Text("实盘（点改）", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("实盘（点改）", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -333,7 +419,9 @@ private fun ItemCountingOverlay(
     item: InventoryItem,
     onAdjust: (Int) -> Unit,
     onEdit: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onNext: () -> Unit,
+    hasNext: Boolean
 ) {
     // 激活音量键路由到本条目
     DisposableEffect(item.id) {
@@ -344,6 +432,7 @@ private fun ItemCountingOverlay(
 
     val diff = item.countedQty - item.expectedQty
     val diffColor = if (diff == 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     Surface(
         Modifier
@@ -379,10 +468,15 @@ private fun ItemCountingOverlay(
                 Text(
                     item.countedQty.toString(),
                     fontSize = 100.sp,
-                    fontWeight = FontWeight.Black
+                    fontWeight = FontWeight.Black,
+                    color = if (item.countedQty < 0) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified
                 )
                 Text(
-                    if (diff == 0L) "与账面一致" else "差异 ${diff}",
+                    when {
+                        item.countedQty < 0 -> "已减过头（${item.countedQty}），请点改实盘修正"
+                        diff == 0L -> "与账面一致"
+                        else -> "差异 ${diff}"
+                    },
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = diffColor
@@ -398,14 +492,20 @@ private fun ItemCountingOverlay(
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth()) {
                     OutlinedButton(
-                        onClick = { onAdjust(-1) },
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            onAdjust(-1)
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(64.dp)
                     ) { Text("− 1", fontSize = 22.sp) }
                     Spacer(Modifier.width(14.dp))
                     Button(
-                        onClick = { onAdjust(+1) },
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            onAdjust(+1)
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(64.dp)
@@ -420,13 +520,21 @@ private fun ItemCountingOverlay(
                             .height(48.dp)
                     ) { Text("改实盘/备注", fontSize = 17.sp) }
                     Spacer(Modifier.width(14.dp))
-                    Button(
-                        onClick = onDismiss,
+                    OutlinedButton(
+                        onClick = onNext,
+                        enabled = hasNext,
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
-                    ) { Text("完成", fontSize = 19.sp) }
+                    ) { Text(if (hasNext) "下一未盘 →" else "全部已盘", fontSize = 17.sp) }
                 }
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                ) { Text("完成", fontSize = 19.sp) }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "音量上键 +1　音量下键 −1",
@@ -441,10 +549,13 @@ private fun ItemCountingOverlay(
 private fun EditItemDialog(
     item: InventoryItem,
     onDismiss: () -> Unit,
-    onSave: (Long, String) -> Unit
+    onSave: (Long, String) -> Unit,
+    onMarkUntouched: () -> Unit
 ) {
     var counted by remember { mutableStateOf(item.countedQty.toString()) }
     var remark by remember { mutableStateOf(item.remark) }
+    var confirmUntouched by remember { mutableStateOf(false) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("修改：${item.name}") },
@@ -464,10 +575,19 @@ private fun EditItemDialog(
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 19.sp),
                     label = { Text("备注", fontSize = 16.sp) }
                 )
+                if (item.touched) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { confirmUntouched = true }, modifier = Modifier.height(44.dp)) {
+                        Text("撤销已盘标记（实盘清零）", fontSize = 15.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(counted.toLongOrNull() ?: item.countedQty, remark) }) {
+            TextButton(onClick = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                onSave(counted.toLongOrNull() ?: item.countedQty, remark)
+            }) {
                 Text("保存", fontSize = 17.sp)
             }
         },
@@ -475,4 +595,19 @@ private fun EditItemDialog(
             TextButton(onClick = onDismiss) { Text("取消", fontSize = 17.sp) }
         }
     )
+    if (confirmUntouched) {
+        AlertDialog(
+            onDismissRequest = { confirmUntouched = false },
+            title = { Text("撤销已盘标记") },
+            text = { Text("「${item.name}」的实盘数将从 ${item.countedQty} 清零并回到未盘状态（变更会记入流水）。确定？") },
+            confirmButton = {
+                TextButton(onClick = { onMarkUntouched() }) {
+                    Text("确定清零", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUntouched = false }) { Text("取消") }
+            }
+        )
+    }
 }

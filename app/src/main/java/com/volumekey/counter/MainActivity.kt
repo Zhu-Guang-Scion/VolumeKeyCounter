@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import com.volumekey.counter.data.AppDatabase
 import com.volumekey.counter.data.CounterCoordinator
@@ -66,7 +67,6 @@ class MainActivity : ComponentActivity() {
     private val showCountersManager = mutableStateOf(false)
     private val showKeepAliveGuide = mutableStateOf(false)
     private val showInventory = mutableStateOf(false)
-    private val inventoryToast = mutableStateOf<String?>(null)
     private var startPocketWhenResumed = false
 
     private val requestNotifPermission =
@@ -86,8 +86,11 @@ class MainActivity : ComponentActivity() {
                 val result = InventoryImporter.import(applicationContext, uri)
                 inventoryViewModel.importDone(result.listId)
                 withContext(Dispatchers.Main) {
-                    inventoryToast.value = "已导入 ${result.rows} 条（跳过 ${result.skipped} 条）"
-                    toast("清单导入成功：${result.rows} 条")
+                    val sb = StringBuilder("导入成功 ${result.rows} 条")
+                    if (result.skipped > 0) sb.append("，跳过 ${result.skipped} 条（名称为空）")
+                    if (result.qtyInvalid > 0) sb.append("，${result.qtyInvalid} 处数量无法识别按 0 计")
+                    if (!result.headerMatched) sb.append("\n未识别到标准表头，已按默认列序解析，请核对前几行")
+                    toast(sb.toString())
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -115,16 +118,29 @@ class MainActivity : ComponentActivity() {
                         },
                         onImportClicked = {
                             try {
-                                importCsvLauncher.launch(arrayOf("*/*"))
+                                importCsvLauncher.launch(
+                                    arrayOf(
+                                        "text/*",
+                                        "application/csv",
+                                        "application/vnd.ms-excel",
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        "application/octet-stream"
+                                    )
+                                )
                             } catch (_: Exception) {
                                 toast("无法打开文件选择器")
                             }
                         },
                         onTemplateClicked = {
                             val saved = InventoryImporter.writeTemplate(this@MainActivity)
-                            toast(if (saved != null) "模板已生成：$saved" else "模板生成失败")
+                            if (saved != null) {
+                                toast("模板已生成：$saved")
+                            } else {
+                                val ok = CsvExporter.shareAsFile(this@MainActivity, "盘点清单模板.csv", InventoryImporter.TEMPLATE_CSV)
+                                toast(if (ok) "已生成模板并通过分享发出" else "模板生成失败")
+                            }
                         },
-                        toastMsg = inventoryToast.value
+                        onExportClicked = ::exportInventory
                     )
                 } else {
                     CounterScreen(
@@ -204,7 +220,7 @@ class MainActivity : ComponentActivity() {
         when {
             invId != null -> {
                 vibrateTick()
-                inventoryViewModel.adjust(invId, delta)
+                inventoryViewModel.adjust(invId, delta, CounterRepository.INVENTORY_SOURCE_VOLUME)
             }
             showInventory.value -> {
                 vibrateTick() // 盘点板面无激活条目：仅震动反馈，不计数
@@ -315,8 +331,38 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent.createChooser(intent, "分享计数汇总"))
     }
 
-    private fun exportCsv() {
+    /** 导出盘点结果 CSV（清单概要+条目表+变更明细）到 Download */
+    private fun exportInventory() {
         lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val listId = inventoryViewModel.activeListId.value
+                if (listId == null) {
+                    withContext(Dispatchers.Main) { toast("当前没有清单可导出") }
+                    return@launch
+                }
+                val db = AppDatabase.getInstance(applicationContext)
+                val repo = CounterRepository(db, db.counterDao())
+                val list = repo.observeInventoryLists().first().firstOrNull { it.id == listId }
+                    ?: throw IllegalStateException("清单不存在")
+                val items = repo.observeInventoryItems(listId).first()
+                val events = repo.getInventoryEventsOfList(listId)
+                val csvText = CsvExporter.buildInventoryCsv(list, items, events)
+                val fileName = CsvExporter.inventoryFileName(list.name)
+                val saved = CsvExporter.saveToDownloads(applicationContext, fileName, csvText)
+                withContext(Dispatchers.Main) {
+                    if (saved != null) {
+                        toast("已导出到 下载 文件夹：$saved（可用 Excel/WPS 打开）")
+                    } else if (!CsvExporter.shareAsFile(this@MainActivity, fileName, csvText)) {
+                        toast("导出失败")
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { toast("导出失败：${e.message}") }
+            }
+        }
+    }
+
+    private fun exportCsv() {        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val db = AppDatabase.getInstance(applicationContext)
                 val repo = CounterRepository(db, db.counterDao())
@@ -364,13 +410,13 @@ private fun KeepAliveGuideDialog(
         text = {
             Column {
                 OemKeepAlive.steps().forEach { step ->
-                    Text("• $step", style = MaterialTheme.typography.bodySmall)
+                    Text("• $step", fontSize = 15.sp)
                     Spacer(Modifier.height(4.dp))
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "完成设置后，长时间熄屏计数更可靠；不做设置通常也能用，但个别系统可能中途休眠。",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

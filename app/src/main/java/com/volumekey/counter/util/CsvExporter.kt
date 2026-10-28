@@ -52,12 +52,59 @@ object CsvExporter {
     }
 
     private fun csv(s: String): String =
-        if (s.contains(',') || s.contains('"') || s.contains('\n')) "\"${s.replace("\"", "\"\"")}\"" else s
+        if (s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')) "\"${s.replace("\"", "\"\"")}\"" else s
 
     fun fileName(counterName: String): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val safe = counterName.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_")
         return "计数器_${safe}_$stamp.csv"
+    }
+
+    fun inventoryFileName(listName: String): String {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val safe = listName.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_")
+        return "盘点_${safe}_$stamp.csv"
+    }
+
+    private fun invSourceName(s: String): String = when (s) {
+        "volume" -> "音量键"
+        "screen" -> "屏幕按钮"
+        "manual" -> "手动修改"
+        else -> s
+    }
+
+    /** 盘点结果导出：清单概要 + 条目表 + 变更明细（含手动下调/清零等回退复位式记录） */
+    fun buildInventoryCsv(
+        list: com.volumekey.counter.data.InventoryList,
+        items: List<com.volumekey.counter.data.InventoryItem>,
+        events: List<com.volumekey.counter.data.InventoryEvent>
+    ): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val touchedCount = items.count { it.touched }
+        val diffCount = items.count { it.touched && it.countedQty != it.expectedQty }
+        val sb = StringBuilder()
+        sb.append("[清单] 名称,总项数,已盘,差异项\n")
+        sb.append("${csv(list.name)},${items.size},$touchedCount,$diffCount\n\n")
+        sb.append("[条目] 序号,盘点对象名称,自定义列,账面数量,实盘数量,差异,已盘,备注\n")
+        items.forEachIndexed { i, it ->
+            val d = it.countedQty - it.expectedQty
+            sb.append(
+                "${i + 1},${csv(it.name)},${csv(it.customField)},${it.expectedQty},${it.countedQty}," +
+                    "${if (it.touched) d.toString() else ""},${if (it.touched) "是" else "否"},${csv(it.remark)}\n"
+            )
+        }
+        if (events.isNotEmpty()) {
+            sb.append("\n[变更明细] 序号,条目,时间,变化,变更后,来源\n")
+            val nameMap = items.associate { it.id to it.name }
+            events.forEachIndexed { i, e ->
+                val delta = if (e.delta > 0) "+${e.delta}" else "${e.delta}"
+                sb.append(
+                    "${i + 1},${csv(nameMap[e.itemId] ?: "?")},${csv(fmt.format(Date(e.timestamp)))},$delta,${e.valueAfter},${csv(invSourceName(e.source))}\n"
+                )
+            }
+        }
+        sb.append("\n导出时间,${csv(fmt.format(Date()))}\n")
+        return sb.toString()
     }
 
     /** @return 成功时返回提示路径文案；失败返回 null（调用方走分享兜底） */

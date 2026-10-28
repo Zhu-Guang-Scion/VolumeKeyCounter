@@ -14,10 +14,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** 清单筛选维度 */
+enum class InventoryFilter { ALL, UNTOUCHED, TOUCHED, DIFF }
 
 class InventoryViewModel(
     private val repo: CounterRepository
@@ -28,6 +32,7 @@ class InventoryViewModel(
 
     val activeListId = MutableStateFlow<Long?>(null)
     val searchQuery = MutableStateFlow("")
+    val filter = MutableStateFlow(InventoryFilter.ALL)
 
     init {
         // 默认选中最近一份清单
@@ -40,26 +45,48 @@ class InventoryViewModel(
         }
     }
 
+    private fun applyFilter(list: List<InventoryItem>, q: String, f: InventoryFilter): List<InventoryItem> {
+        var r = list
+        if (q.isNotEmpty()) r = r.filter {
+            it.name.contains(q, ignoreCase = true) || it.customField.contains(q, ignoreCase = true)
+        }
+        r = when (f) {
+            InventoryFilter.ALL -> r
+            InventoryFilter.UNTOUCHED -> r.filter { !it.touched }
+            InventoryFilter.TOUCHED -> r.filter { it.touched }
+            InventoryFilter.DIFF -> r.filter { it.touched && it.countedQty != it.expectedQty }
+        }
+        return r
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    val items: StateFlow<List<InventoryItem>> = combine(activeListId, searchQuery) { id, q -> id to q.trim() }
-        .flatMapLatest { (id, q) ->
+    val items: StateFlow<List<InventoryItem>> = combine(
+        activeListId, searchQuery, filter
+    ) { id, q, f -> Triple(id, q.trim(), f) }
+        .flatMapLatest { (id, q, f) ->
             if (id == null) flowOf(emptyList())
-            else repo.observeInventoryItems(id).map { list ->
-                if (q.isEmpty()) list
-                else list.filter { it.name.contains(q, ignoreCase = true) || it.customField.contains(q, ignoreCase = true) }
-            }
+            else repo.observeInventoryItems(id).map { applyFilter(it, q, f) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    data class Summary(val total: Int, val touched: Int, val diff: Int)
+    data class Summary(val total: Int, val touched: Int, val diff: Int) {
+        val untouched: Int get() = total - touched
+    }
 
-    val summary: StateFlow<Summary> = items.map { list ->
-        Summary(
-            total = list.size,
-            touched = list.count { it.touched },
-            diff = list.count { it.touched && it.countedQty != it.expectedQty }
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Summary(0, 0, 0))
+    /** 全量统计（不受检索/筛选影响，用于筛选标签角标） */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val summary: StateFlow<Summary> = activeListId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(Summary(0, 0, 0))
+            else repo.observeInventoryItems(id).map { list ->
+                Summary(
+                    total = list.size,
+                    touched = list.count { it.touched },
+                    diff = list.count { it.touched && it.countedQty != it.expectedQty }
+                )
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Summary(0, 0, 0))
 
     fun selectList(id: Long) {
         activeListId.value = id
@@ -67,28 +94,35 @@ class InventoryViewModel(
 
     fun importDone(listId: Long) {
         activeListId.value = listId
+        filter.value = InventoryFilter.ALL
+        searchQuery.value = ""
+    }
+
+    fun setFilter(f: InventoryFilter) {
+        filter.value = f
     }
 
     fun deleteActiveList() {
         val id = activeListId.value ?: return
         viewModelScope.launch {
-            val list = lists.value.firstOrNull { it.id == id } ?: return@launch
+            val list = repo.observeInventoryLists().first().firstOrNull { it.id == id } ?: return@launch
             repo.deleteInventoryList(list)
-            activeListId.value = lists.value.firstOrNull { it.id != id }?.id
+            // 以数据库最新状态选择下一个清单（避免 StateFlow 缓存滞后）
+            activeListId.value = repo.observeInventoryLists().first().firstOrNull()?.id
         }
     }
 
-    fun adjust(itemId: Long, delta: Int) {
+    fun adjust(itemId: Long, delta: Int, source: String) {
         if (delta == 0) return
-        viewModelScope.launch { repo.adjustInventoryItem(itemId, delta.toLong()) }
+        viewModelScope.launch { repo.adjustInventoryItem(itemId, delta.toLong(), source) }
     }
 
     fun setCountedAndRemark(itemId: Long, counted: Long, remark: String) {
         viewModelScope.launch { repo.setInventoryItemFields(itemId, counted, remark) }
     }
 
-    fun setRemark(itemId: Long, remark: String) {
-        viewModelScope.launch { repo.setInventoryItemRemark(itemId, remark) }
+    fun markUntouched(itemId: Long) {
+        viewModelScope.launch { repo.markInventoryItemUntouched(itemId) }
     }
 }
 

@@ -15,8 +15,8 @@ android {
         applicationId = "com.volumekey.counter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.2.0"
+        versionCode = 11
+        versionName = "1.3.0"
     }
 
     // 发布签名：密钥与口令放在 keystore/signing.properties（不入 git）

@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.volumekey.counter.data.Counter
 
 /** 计数器管理：列表 / 新建 / 重命名 / 切换 / 删除 / CSV 导出 / 保活指引入口 */
@@ -75,7 +76,7 @@ fun CountersManagerDialog(
 
                 Text(
                     "点选一个计数器切换为当前计数；各计数器的检查点与日志相互独立。",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
@@ -189,7 +190,7 @@ private fun CounterRow(
                 }
                 Text(
                     "计数 ${counter.value}",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

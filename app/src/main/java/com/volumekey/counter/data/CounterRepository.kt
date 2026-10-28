@@ -103,19 +103,49 @@ class CounterRepository(
         dao.deleteInventoryList(list.id)
     }
 
-    /** 音量键/按钮调整某条目实盘数（标记已盘） */
-    suspend fun adjustInventoryItem(itemId: Long, delta: Long) = db.withTransaction {
+    /** 音量键/屏幕按钮调整某条目实盘数（标记已盘并记流水） */
+    suspend fun adjustInventoryItem(itemId: Long, delta: Long, source: String) = db.withTransaction {
         val item = dao.getInventoryItem(itemId) ?: return@withTransaction
-        dao.updateInventoryItemCounted(itemId, item.countedQty + delta)
+        val newValue = item.countedQty + delta
+        dao.updateInventoryItemCounted(itemId, newValue)
+        dao.insertInventoryEvent(
+            InventoryEvent(itemId = itemId, delta = delta, valueAfter = newValue, source = source)
+        )
     }
 
-    suspend fun setInventoryItemFields(itemId: Long, counted: Long, remark: String) {
-        dao.updateInventoryItemFields(itemId, counted, remark)
+    suspend fun setInventoryItemFields(itemId: Long, counted: Long, remark: String) = db.withTransaction {
+        val item = dao.getInventoryItem(itemId) ?: return@withTransaction
+        if (counted == item.countedQty) {
+            // 数量未变：只改备注，不把未盘条目标成已盘
+            dao.updateInventoryItemRemark(itemId, remark)
+        } else {
+            dao.updateInventoryItemFields(itemId, counted, remark)
+            dao.insertInventoryEvent(
+                InventoryEvent(
+                    itemId = itemId,
+                    delta = counted - item.countedQty,
+                    valueAfter = counted,
+                    source = INVENTORY_SOURCE_MANUAL
+                )
+            )
+        }
     }
 
-    suspend fun setInventoryItemRemark(itemId: Long, remark: String) {
-        dao.updateInventoryItemRemark(itemId, remark)
+    /** 标记为未盘：实盘清零并记流水（误触已盘的撤销路径；含盘0后撤销的场景也留痕） */
+    suspend fun markInventoryItemUntouched(itemId: Long) = db.withTransaction {
+        val item = dao.getInventoryItem(itemId) ?: return@withTransaction
+        dao.insertInventoryEvent(
+            InventoryEvent(
+                itemId = itemId,
+                delta = -item.countedQty,
+                valueAfter = 0L,
+                source = INVENTORY_SOURCE_MANUAL
+            )
+        )
+        dao.resetInventoryItemTouched(itemId)
     }
+
+    suspend fun getInventoryEventsOfList(listId: Long) = dao.getInventoryEventsOfList(listId)
 
     companion object {
         const val SOURCE_VOLUME_UP = "volume_up"
@@ -124,5 +154,10 @@ class CounterRepository(
         const val SOURCE_POCKET = "pocket"
         const val SOURCE_ROLLBACK = "rollback"
         const val SOURCE_RESET = "reset"
+
+        // 清单盘点变更来源
+        const val INVENTORY_SOURCE_VOLUME = "volume"
+        const val INVENTORY_SOURCE_SCREEN = "screen"
+        const val INVENTORY_SOURCE_MANUAL = "manual"
     }
 }

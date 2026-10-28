@@ -88,4 +88,13 @@ interface CounterDao {
 
     @Query("UPDATE inventory_items SET remark = :remark WHERE id = :id")
     suspend fun updateInventoryItemRemark(id: Long, remark: String)
+
+    @Query("UPDATE inventory_items SET countedQty = 0, touched = 0 WHERE id = :id")
+    suspend fun resetInventoryItemTouched(id: Long)
+
+    @Insert
+    suspend fun insertInventoryEvent(event: InventoryEvent)
+
+    @Query("SELECT * FROM inventory_events WHERE itemId IN (SELECT id FROM inventory_items WHERE listId = :listId) ORDER BY timestamp ASC, id ASC")
+    suspend fun getInventoryEventsOfList(listId: Long): List<InventoryEvent>
 }

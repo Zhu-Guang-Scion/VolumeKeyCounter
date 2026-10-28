@@ -63,6 +63,8 @@ class CountingService : android.app.Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var repo: CounterRepository? = null
     private var counterId: Long = -1L
+    private var settings: com.volumekey.counter.data.SettingsStore? = null
+    private var notificationJob: kotlinx.coroutines.Job? = null
 
     private var mediaSession: MediaSessionCompat? = null
     private var audioTrack: AudioTrack? = null
@@ -86,18 +88,38 @@ class CountingService : android.app.Service() {
         super.onCreate()
         val db = AppDatabase.getInstance(this)
         repo = CounterRepository(db, db.counterDao())
+        settings = com.volumekey.counter.data.SettingsStore(this)
         audioManager = getSystemService(AudioManager::class.java)
 
         createChannel()
         startForegroundWithNotification("口袋模式启动中…")
 
-        // 阻塞取一次激活计数器，避免服务早期收到音量键事件时无计数器可用
-        counterId = runBlocking { CounterCoordinator.ensureActiveCounter(this@CountingService) }
+        // 异步加载激活计数器（避免主线程 runBlocking 与全局 Mutex 的死锁窗口）；
+        // 之后持续跟随用户切换计数器，音量键与通知始终对着当前计数器
+        serviceScope.launch {
+            try {
+                com.volumekey.counter.data.CounterCoordinator.ensureActiveCounter(this@CountingService).let {
+                    counterId = it
+                    restartCounterObserver()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("CountingService", "load counter failed", e)
+            }
+        }
+        settings?.let { s ->
+            serviceScope.launch {
+                s.activeCounterId.collectLatest { newId ->
+                    if (newId != null && newId != counterId) {
+                        counterId = newId
+                        restartCounterObserver()
+                    }
+                }
+            }
+        }
 
         setupMediaSession()
         startSilentLoop()
         requestAudioFocus()
-        observeCounterForNotification()
         PocketModeState.isRunning.value = true
     }
 
@@ -163,10 +185,19 @@ class CountingService : android.app.Service() {
         val id = counterId
         val repository = repo
         val routingItemId = com.volumekey.counter.service.CountRouting.activeInventoryItemId.value
+        val boardOpen = com.volumekey.counter.service.CountRouting.boardOpen.value
         if (repository != null) {
             if (routingItemId != null) {
                 // 清单盘点条目激活：音量键计入该条目实盘数
-                serviceScope.launch { repository.adjustInventoryItem(routingItemId, direction.toLong()) }
+                serviceScope.launch {
+                    repository.adjustInventoryItem(
+                        routingItemId,
+                        direction.toLong(),
+                        CounterRepository.INVENTORY_SOURCE_VOLUME
+                    )
+                }
+            } else if (boardOpen) {
+                // 盘点板面可见但未选条目：与前台行为一致，忽略按键防误改普通计数器
             } else if (id > 0) {
                 serviceScope.launch {
                     repository.adjust(id, direction.toLong(), CounterRepository.SOURCE_POCKET)
@@ -279,11 +310,12 @@ class CountingService : android.app.Service() {
         }
     }
 
-    private fun observeCounterForNotification() {
+    private fun restartCounterObserver() {
+        notificationJob?.cancel()
         val repository = repo ?: return
         val id = counterId
         if (id <= 0) return
-        serviceScope.launch {
+        notificationJob = serviceScope.launch {
             repository.observeCounter(id).collectLatest { counter ->
                 val value = counter?.value ?: 0L
                 val countText = "当前计数：$value"
@@ -309,6 +341,7 @@ class CountingService : android.app.Service() {
 
     override fun onDestroy() {
         PocketModeState.isRunning.value = false
+        notificationJob?.cancel()
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null

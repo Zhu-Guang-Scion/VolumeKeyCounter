@@ -16,8 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -94,7 +93,7 @@ fun CounterScreen(
                     }
                     IconButton(onClick = onToggleKeepScreenOn) {
                         Icon(
-                            imageVector = if (keepScreenOn) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                            imageVector = Icons.Filled.LightMode,
                             contentDescription = if (keepScreenOn) "关闭屏幕常亮" else "开启屏幕常亮"
                         )
                     }
@@ -130,8 +129,12 @@ fun CounterScreen(
             }
 
             Row(Modifier.fillMaxWidth()) {
+                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
                 OutlinedButton(
-                    onClick = { onAdjust(-1, CounterRepository.SOURCE_BUTTON) },
+                    onClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onAdjust(-1, CounterRepository.SOURCE_BUTTON)
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .height(64.dp)
@@ -140,7 +143,10 @@ fun CounterScreen(
                 }
                 Spacer(Modifier.width(12.dp))
                 Button(
-                    onClick = { onAdjust(+1, CounterRepository.SOURCE_BUTTON) },
+                    onClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onAdjust(+1, CounterRepository.SOURCE_BUTTON)
+                    },
                     modifier = Modifier
                         .weight(1f)
                         .height(64.dp)
@@ -190,7 +196,7 @@ fun CounterScreen(
                 ) {
                     Text(
                         "口袋模式运行中：熄屏 / 锁屏 / 切到后台，音量键仍持续计数",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     )
@@ -229,7 +235,7 @@ fun CounterScreen(
                 Column(Modifier.weight(1f)) {
                     Text(
                         "暂无检查点。计数过程中可随时保存当前计数为命名检查点，用于核对与回退。",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -251,8 +257,8 @@ fun CounterScreen(
             // 页脚水印
             Text(
                 "code by 逐光",
-                fontSize = 11.sp,
-                color = Color(0xFFB3B3B3),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -385,7 +391,7 @@ private fun CheckpointRow(
                 Text(checkpoint.name, style = MaterialTheme.typography.titleSmall)
                 Text(
                     "计数值 ${checkpoint.value} · ${timeFmt.format(Date(checkpoint.createdAt))}",
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

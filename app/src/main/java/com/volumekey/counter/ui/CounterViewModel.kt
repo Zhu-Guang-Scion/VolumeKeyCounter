@@ -118,13 +118,15 @@ class CounterViewModel(
         viewModelScope.launch { repo.renameCounter(id, name) }
     }
 
-    /** 删除计数器（连同其事件日志与检查点）；若删的是激活计数器则切换到最近的，没有则重建默认 */
+    /** 删除计数器（连同其事件日志与检查点）；删除后与 DataStore 对账，必要时切换/重建激活计数器 */
     fun deleteCounter(counter: Counter) {
         viewModelScope.launch {
             repo.deleteCounterCompletely(counter)
-            if (counter.id == cachedId) {
-                val remaining = repo.observeAllCounters().first().firstOrNull()
-                val newId = remaining?.id ?: repo.createCounter(defaultCounterName(0))
+            val dataStoreId = settings.getActiveCounterId()
+            val remaining = repo.observeAllCounters().first()
+            val activeValid = dataStoreId != null && remaining.any { it.id == dataStoreId }
+            if (counter.id == cachedId || !activeValid) {
+                val newId = remaining.firstOrNull()?.id ?: repo.createCounter(defaultCounterName(0))
                 settings.setActiveCounterId(newId)
                 cachedId = newId
             }
