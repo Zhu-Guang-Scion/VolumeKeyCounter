@@ -14,7 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -62,6 +62,7 @@ fun CounterScreen(
     onTogglePocketMode: () -> Unit,
     onShareSummary: () -> Unit,
     onOpenCounters: () -> Unit,
+    onOpenInventory: () -> Unit,
     onAdjust: (Int, String) -> Unit,
     onSaveCheckpoint: (String) -> Unit,
     onRollback: (Checkpoint) -> Unit,
@@ -79,6 +80,12 @@ fun CounterScreen(
             TopAppBar(
                 title = { Text(uiState.counter?.name ?: "音量键计数器") },
                 actions = {
+                    IconButton(onClick = onOpenInventory) {
+                        Icon(
+                            Icons.Filled.Checklist,
+                            contentDescription = "清单盘点"
+                        )
+                    }
                     IconButton(onClick = onOpenCounters) {
                         Icon(
                             Icons.AutoMirrored.Filled.List,
@@ -102,12 +109,6 @@ fun CounterScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(6.dp))
                 Text(
                     "音量上键 +1　·　音量下键 −1",
                     style = MaterialTheme.typography.bodyMedium,

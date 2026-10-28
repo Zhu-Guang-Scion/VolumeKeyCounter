@@ -162,9 +162,15 @@ class CountingService : android.app.Service() {
         vibrateTick()
         val id = counterId
         val repository = repo
-        if (id > 0 && repository != null) {
-            serviceScope.launch {
-                repository.adjust(id, direction.toLong(), CounterRepository.SOURCE_POCKET)
+        val routingItemId = com.volumekey.counter.service.CountRouting.activeInventoryItemId.value
+        if (repository != null) {
+            if (routingItemId != null) {
+                // 清单盘点条目激活：音量键计入该条目实盘数
+                serviceScope.launch { repository.adjustInventoryItem(routingItemId, direction.toLong()) }
+            } else if (id > 0) {
+                serviceScope.launch {
+                    repository.adjust(id, direction.toLong(), CounterRepository.SOURCE_POCKET)
+                }
             }
         }
     }

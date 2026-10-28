@@ -56,4 +56,36 @@ interface CounterDao {
 
     @Query("SELECT * FROM count_events WHERE counterId = :counterId ORDER BY timestamp ASC, id ASC")
     suspend fun getAllEvents(counterId: Long): List<CountEvent>
+
+    // ---- 清单盘点 ----
+
+    @Query("SELECT * FROM inventory_lists ORDER BY createdAt DESC, id DESC")
+    fun observeInventoryLists(): Flow<List<InventoryList>>
+
+    @Insert
+    suspend fun insertInventoryList(list: InventoryList): Long
+
+    @Query("UPDATE inventory_lists SET itemCount = :count WHERE id = :id")
+    suspend fun updateInventoryItemCount(id: Long, count: Int)
+
+    @Query("DELETE FROM inventory_lists WHERE id = :id")
+    suspend fun deleteInventoryList(id: Long)
+
+    @Query("SELECT * FROM inventory_items WHERE listId = :listId ORDER BY sortOrder ASC, id ASC")
+    fun observeInventoryItems(listId: Long): Flow<List<InventoryItem>>
+
+    @Query("SELECT * FROM inventory_items WHERE id = :id")
+    suspend fun getInventoryItem(id: Long): InventoryItem?
+
+    @Insert
+    suspend fun insertInventoryItems(items: List<InventoryItem>)
+
+    @Query("UPDATE inventory_items SET countedQty = :counted, touched = 1 WHERE id = :id")
+    suspend fun updateInventoryItemCounted(id: Long, counted: Long)
+
+    @Query("UPDATE inventory_items SET countedQty = :counted, touched = 1, remark = :remark WHERE id = :id")
+    suspend fun updateInventoryItemFields(id: Long, counted: Long, remark: String)
+
+    @Query("UPDATE inventory_items SET remark = :remark WHERE id = :id")
+    suspend fun updateInventoryItemRemark(id: Long, remark: String)
 }

@@ -87,6 +87,36 @@ class CounterRepository(
 
     suspend fun getAllEvents(counterId: Long) = dao.getAllEvents(counterId)
 
+    // ---- 清单盘点 ----
+
+    fun observeInventoryLists() = dao.observeInventoryLists()
+
+    fun observeInventoryItems(listId: Long) = dao.observeInventoryItems(listId)
+
+    suspend fun insertInventoryList(name: String, items: List<InventoryItem>): Long = db.withTransaction {
+        val listId = dao.insertInventoryList(InventoryList(name = name, itemCount = items.size))
+        dao.insertInventoryItems(items.map { it.copy(listId = listId) })
+        listId
+    }
+
+    suspend fun deleteInventoryList(list: InventoryList) {
+        dao.deleteInventoryList(list.id)
+    }
+
+    /** 音量键/按钮调整某条目实盘数（标记已盘） */
+    suspend fun adjustInventoryItem(itemId: Long, delta: Long) = db.withTransaction {
+        val item = dao.getInventoryItem(itemId) ?: return@withTransaction
+        dao.updateInventoryItemCounted(itemId, item.countedQty + delta)
+    }
+
+    suspend fun setInventoryItemFields(itemId: Long, counted: Long, remark: String) {
+        dao.updateInventoryItemFields(itemId, counted, remark)
+    }
+
+    suspend fun setInventoryItemRemark(itemId: Long, remark: String) {
+        dao.updateInventoryItemRemark(itemId, remark)
+    }
+
     companion object {
         const val SOURCE_VOLUME_UP = "volume_up"
         const val SOURCE_VOLUME_DOWN = "volume_down"

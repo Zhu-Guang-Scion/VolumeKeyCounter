@@ -34,14 +34,19 @@ import com.volumekey.counter.data.CounterCoordinator
 import com.volumekey.counter.data.CounterRepository
 import com.volumekey.counter.data.SettingsStore
 import com.volumekey.counter.oem.OemKeepAlive
+import com.volumekey.counter.service.CountRouting
 import com.volumekey.counter.service.CountingService
 import com.volumekey.counter.service.PocketModeState
 import com.volumekey.counter.ui.CounterScreen
 import com.volumekey.counter.ui.CounterViewModel
 import com.volumekey.counter.ui.CounterViewModelFactory
 import com.volumekey.counter.ui.CountersManagerDialog
+import com.volumekey.counter.ui.InventoryScreen
+import com.volumekey.counter.ui.InventoryViewModel
+import com.volumekey.counter.ui.InventoryViewModelFactory
 import com.volumekey.counter.ui.theme.VolumeCounterTheme
 import com.volumekey.counter.util.CsvExporter
+import com.volumekey.counter.util.InventoryImporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -53,12 +58,15 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
 
     private val viewModel: CounterViewModel by viewModels { CounterViewModelFactory(applicationContext) }
+    private val inventoryViewModel: InventoryViewModel by viewModels { InventoryViewModelFactory(applicationContext) }
     private val settings by lazy { SettingsStore(applicationContext) }
 
     private val keepScreenOnState = mutableStateOf(false)
     private var longPressHintShown = false
     private val showCountersManager = mutableStateOf(false)
     private val showKeepAliveGuide = mutableStateOf(false)
+    private val showInventory = mutableStateOf(false)
+    private val inventoryToast = mutableStateOf<String?>(null)
     private var startPocketWhenResumed = false
 
     private val requestNotifPermission =
@@ -66,6 +74,28 @@ class MainActivity : ComponentActivity() {
             startPocketServiceSafely()
             if (!granted) toast("未授予通知权限：仍可计数，但通知栏不显示当前数值")
         }
+
+    private val importCsvLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) handleImportCsv(uri)
+        }
+
+    private fun handleImportCsv(uri: android.net.Uri) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val result = InventoryImporter.import(applicationContext, uri)
+                inventoryViewModel.importDone(result.listId)
+                withContext(Dispatchers.Main) {
+                    inventoryToast.value = "已导入 ${result.rows} 条（跳过 ${result.skipped} 条）"
+                    toast("清单导入成功：${result.rows} 条")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    toast("导入失败：${e.message}")
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,21 +106,44 @@ class MainActivity : ComponentActivity() {
                 val pocketRunning by PocketModeState.isRunning.collectAsState()
                 val allCounters by viewModel.allCounters.collectAsState()
 
-                CounterScreen(
-                    uiState = uiState,
-                    keepScreenOn = keepScreenOnState.value,
-                    pocketRunning = pocketRunning,
-                    onToggleKeepScreenOn = ::toggleKeepScreenOn,
-                    onTogglePocketMode = ::togglePocketMode,
-                    onShareSummary = ::shareSummary,
-                    onOpenCounters = { showCountersManager.value = true },
-                    onAdjust = ::adjustCount,
-                    onSaveCheckpoint = viewModel::saveCheckpoint,
-                    onRollback = viewModel::rollback,
-                    onDeleteCheckpoint = viewModel::deleteCheckpoint,
-                    onReset = viewModel::resetCounter,
-                    defaultCheckpointName = { viewModel.defaultCheckpointName(uiState.checkpoints.size) }
-                )
+                if (showInventory.value) {
+                    InventoryScreen(
+                        vm = inventoryViewModel,
+                        onClose = {
+                            CountRouting.activeInventoryItemId.value = null
+                            showInventory.value = false
+                        },
+                        onImportClicked = {
+                            try {
+                                importCsvLauncher.launch(arrayOf("*/*"))
+                            } catch (_: Exception) {
+                                toast("无法打开文件选择器")
+                            }
+                        },
+                        onTemplateClicked = {
+                            val saved = InventoryImporter.writeTemplate(this@MainActivity)
+                            toast(if (saved != null) "模板已生成：$saved" else "模板生成失败")
+                        },
+                        toastMsg = inventoryToast.value
+                    )
+                } else {
+                    CounterScreen(
+                        uiState = uiState,
+                        keepScreenOn = keepScreenOnState.value,
+                        pocketRunning = pocketRunning,
+                        onToggleKeepScreenOn = ::toggleKeepScreenOn,
+                        onTogglePocketMode = ::togglePocketMode,
+                        onShareSummary = ::shareSummary,
+                        onOpenCounters = { showCountersManager.value = true },
+                        onOpenInventory = { showInventory.value = true },
+                        onAdjust = ::adjustCount,
+                        onSaveCheckpoint = viewModel::saveCheckpoint,
+                        onRollback = viewModel::rollback,
+                        onDeleteCheckpoint = viewModel::deleteCheckpoint,
+                        onReset = viewModel::resetCounter,
+                        defaultCheckpointName = { viewModel.defaultCheckpointName(uiState.checkpoints.size) }
+                    )
+                }
 
                 if (showCountersManager.value) {
                     CountersManagerDialog(
@@ -120,18 +173,19 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 前台音量键计数：App 可见时拦截音量上/下键（计 1 次并消费，系统音量不变）。
-     * 长按连发事件同样被消费但不重复计数——口袋模式开启时若把连发交回系统，
-     * 会被 MediaSession 路由回本应用的 VolumeProvider 造成连计（P0 修复）。
+     * 音量键计数（前台拦截路径）：
+     * - 清单盘点条目激活 → 计入该条目实盘数
+     * - 盘点板面打开但未选中条目 → 消费但不动计数（防误改背后的普通计数器）
+     * - 其他 → 计入普通计数器
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
                 if (event.action == KeyEvent.ACTION_DOWN) {
+                    val up = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
                     if (event.repeatCount == 0) {
                         longPressHintShown = false
-                        val up = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
-                        adjustCount(if (up) +1 else -1, if (up) CounterRepository.SOURCE_VOLUME_UP else CounterRepository.SOURCE_VOLUME_DOWN)
+                        routeVolumeKey(if (up) +1 else -1, up)
                     } else if (!longPressHintShown) {
                         longPressHintShown = true
                         toast("长按不重复计数，仅计 1 次")
@@ -143,6 +197,23 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    private fun routeVolumeKey(delta: Int, up: Boolean) {
+        val invId = CountRouting.activeInventoryItemId.value
+        when {
+            invId != null -> {
+                vibrateTick()
+                inventoryViewModel.adjust(invId, delta)
+            }
+            showInventory.value -> {
+                vibrateTick() // 盘点板面无激活条目：仅震动反馈，不计数
+            }
+            else -> adjustCount(
+                delta,
+                if (up) CounterRepository.SOURCE_VOLUME_UP else CounterRepository.SOURCE_VOLUME_DOWN
+            )
+        }
     }
 
     private fun adjustCount(delta: Int, source: String) {

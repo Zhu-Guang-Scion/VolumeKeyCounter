@@ -44,3 +44,35 @@ data class CountEvent(
     val timestamp: Long = System.currentTimeMillis(),
     val source: String
 )
+
+/** 清单盘点：清单 */
+@Entity(tableName = "inventory_lists")
+data class InventoryList(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val itemCount: Int = 0
+)
+
+/** 清单盘点：条目（五维：名称/自定义列/账面数量/实盘数量/备注） */
+@Entity(
+    tableName = "inventory_items",
+    foreignKeys = [ForeignKey(
+        entity = InventoryList::class,
+        parentColumns = ["id"],
+        childColumns = ["listId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("listId")]
+)
+data class InventoryItem(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val listId: Long,
+    val sortOrder: Int,
+    val name: String,
+    val customField: String,
+    val expectedQty: Long,
+    val countedQty: Long,
+    val touched: Boolean = false,
+    val remark: String = ""
+)
