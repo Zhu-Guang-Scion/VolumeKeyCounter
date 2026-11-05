@@ -21,7 +21,7 @@ object PhotoStore {
     private const val MAX_EDGE = 2560
     const val ALBUM_DIR = "盘点取证"
 
-    data class SaveResult(val fileName: String)
+    data class SaveResult(val fileName: String, val uri: String)
 
     fun save(
         context: Context,
@@ -110,19 +110,25 @@ object PhotoStore {
         } finally {
             marked.recycle()
         }
-        return SaveResult(fileName)
+        // 回读系统实际登记的文件名——若同名陈旧行导致系统自动改名为 "xxx (1).jpg"，
+        // 必须以实际名为准，否则后续按名查询/缩略图全部失配
+        val actualName = runCatching {
+            resolver.query(outUri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull()
+        return SaveResult(actualName ?: fileName, outUri.toString())
     }
 
     // ---- 相册查询 / 缩略图 / 删除 ----
 
-    /** 在 盘点取证 相册中按文件名找 MediaStore URI（找不到返回 null，可能是被用户在相册删除） */
+    /** 在 盘点取证 相册中按文件名找 MediaStore URI；MediaStore 查不到时退化为直拼文件路径 URI */
     fun findUri(context: Context, displayName: String): Uri? = try {
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         } else {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         }
-        context.contentResolver.query(
+        val byQuery = context.contentResolver.query(
             collection,
             arrayOf(MediaStore.Images.Media._ID),
             "${MediaStore.Images.Media.DISPLAY_NAME} = ?",
@@ -134,23 +140,52 @@ object PhotoStore {
                 Uri.withAppendedPath(collection, id.toString())
             } else null
         }
+        // MediaStore 查不到（IS_PENDING 期间对其他查询不可见等）→ 直接拼文件路径
+        byQuery ?: Uri.fromFile(
+            File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                "$ALBUM_DIR/$displayName"
+            )
+        ).takeIf { it.path != null && File(it.path!!).canRead() }
     } catch (_: Exception) {
         null
     }
 
-    fun deleteByUri(context: Context, uri: Uri): Boolean = try {
+    fun deleteByUri(context: Context, uriString: String, displayName: String): Boolean = try {
+        val uri: Uri = when {
+            uriString.isNotBlank() -> Uri.parse(uriString)
+            else -> findUri(context, displayName) ?: return false
+        }
         context.contentResolver.delete(uri, null, null) > 0
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * 存在性以「能实际打开流」为准：优先用存储的 URI，退化到按名查询。
+     */
+    fun existsReadable(context: Context, uriString: String, displayName: String): Boolean = try {
+        val uri: Uri = when {
+            uriString.isNotBlank() -> Uri.parse(uriString)
+            else -> findUri(context, displayName) ?: return false
+        }
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.read() } != null
+        }.getOrDefault(false)
     } catch (_: Exception) {
         false
     }
 
     private val thumbCache = android.util.LruCache<String, Bitmap>(48)
 
-    /** 加载缩略图（长边约 320px，LruCache 缓存，IO 线程调用） */
-    fun loadThumbnail(context: Context, displayName: String): Bitmap? {
+    /** 加载缩略图：优先用存储的 content URI，退化到按名查询；长边约 320px，LruCache 缓存，IO 线程调用 */
+    fun loadThumbnail(context: Context, uriString: String, displayName: String): Bitmap? = runCatching {
         val key = "th_$displayName"
         thumbCache.get(key)?.let { return it }
-        val uri = findUri(context, displayName) ?: return null
+        val uri: Uri = when {
+            uriString.isNotBlank() -> Uri.parse(uriString)
+            else -> findUri(context, displayName) ?: return null
+        }
         val resolver = context.contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
@@ -159,8 +194,8 @@ object PhotoStore {
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val bmp = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
         if (bmp != null) thumbCache.put(key, bmp)
-        return bmp
-    }
+        bmp
+    }.getOrNull()
 
     /** 使缩略图缓存失效（删除照片后调用） */
     fun invalidateThumb(displayName: String) {

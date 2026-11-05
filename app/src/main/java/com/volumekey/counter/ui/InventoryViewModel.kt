@@ -156,12 +156,14 @@ class InventoryViewModel(
 
     fun openGallery(itemId: Long) {
         galleryItemId.value = itemId
-        // 对账：照片若已在系统相册被删，同步清掉登记记录，保证计数一致
+        // 对账：照片文件若实际不可读（含 adb/相册外部删除后 MediaStore 残留的陈旧行），
+        // 同步清掉登记记录，保证计数一致
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val records = repo.getInventoryPhotos(itemId)
                 records.forEach { r ->
-                    if (PhotoStore.findUri(appContext, r.fileName) == null) {
+                    if (!PhotoStore.existsReadable(appContext, r.uri, r.fileName)) {
+                        PhotoStore.invalidateThumb(r.fileName)
                         repo.deleteInventoryPhotoRecord(r.id)
                     }
                 }
@@ -173,13 +175,10 @@ class InventoryViewModel(
         galleryItemId.value = null
     }
 
-    /** 删除一张：先删相册文件，再删登记记录（缩略图缓存失效） */
     fun deletePhoto(photo: InventoryPhoto) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                PhotoStore.findUri(appContext, photo.fileName)?.let { uri ->
-                    PhotoStore.deleteByUri(appContext, uri)
-                }
+                PhotoStore.deleteByUri(appContext, photo.uri, photo.fileName)
                 PhotoStore.invalidateThumb(photo.fileName)
                 repo.deleteInventoryPhotoRecord(photo.id)
             }

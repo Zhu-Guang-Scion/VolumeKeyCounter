@@ -113,6 +113,7 @@ data class InventoryPhoto(
     val itemId: Long,
     val seq: Int,
     val fileName: String,
+    val uri: String = "", // 保存时的 content URI，直接用于缩略图/查看/删除
     val takenAt: Long = System.currentTimeMillis(),
     val lat: Double? = null,
     val lng: Double? = null,

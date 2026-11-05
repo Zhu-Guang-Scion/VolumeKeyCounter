@@ -757,7 +757,7 @@ private fun PhotoGalleryOverlay(
                                 .clickable(onClick = { onOpen(p) })
                         ) {
                             Column {
-                                ThumbImage(fileName = p.fileName, ctx = ctx)
+                                ThumbImage(fileName = p.fileName, uriString = p.uri, ctx = ctx)
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
@@ -807,13 +807,13 @@ private fun PhotoGalleryOverlay(
 
 /** 缩略图：IO 线程解码 + LruCache，点击回调由外层处理 */
 @Composable
-private fun ThumbImage(fileName: String, ctx: android.content.Context) {
+private fun ThumbImage(fileName: String, uriString: String, ctx: android.content.Context) {
     var bmp by remember(fileName) {
         mutableStateOf<android.graphics.Bitmap?>(null)
     }
     LaunchedEffect(fileName) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            bmp = com.volumekey.counter.util.PhotoStore.loadThumbnail(ctx, fileName)
+            bmp = com.volumekey.counter.util.PhotoStore.loadThumbnail(ctx, uriString, fileName)
         }
     }
     Box(

@@ -130,12 +130,12 @@ class MainActivity : ComponentActivity() {
 
     private fun startPhotoSessionInternal(item: com.volumekey.counter.data.InventoryItem) {
         photoSession = PhotoSession(item.id, item.name)
-        // 会话开始先对账：清理相册中已不存在文件的孤儿登记，
+        // 会话开始先对账：清理文件实际不可读的孤儿登记（含 MediaStore 陈旧行），
         // 保证序号（MAX(seq)+1）与行内计数都基于真实照片
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 photoRepo.getInventoryPhotos(item.id).forEach { r ->
-                    if (PhotoStore.findUri(applicationContext, r.fileName) == null) {
+                    if (!PhotoStore.existsReadable(applicationContext, r.uri, r.fileName)) {
                         PhotoStore.invalidateThumb(r.fileName)
                         photoRepo.deleteInventoryPhotoRecord(r.id)
                     }
@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
                 val r = PhotoStore.save(this@MainActivity, uri, seq, title, infoLines, fix?.lat, fix?.lng, takenAt, s.itemName)
                 photoRepo.insertInventoryPhoto(
                     com.volumekey.counter.data.InventoryPhoto(
-                        itemId = s.itemId, seq = seq, fileName = r.fileName,
+                        itemId = s.itemId, seq = seq, fileName = r.fileName, uri = r.uri,
                         takenAt = takenAt, lat = fix?.lat, lng = fix?.lng, address = fix?.address
                     )
                 )
@@ -222,7 +222,10 @@ class MainActivity : ComponentActivity() {
     /** 用系统查看器打开一张取证照片 */
     private fun openPhotoViewer(photo: com.volumekey.counter.data.InventoryPhoto) {
         lifecycleScope.launch(Dispatchers.IO) {
-            val uri = PhotoStore.findUri(applicationContext, photo.fileName)
+            val uri = when {
+                photo.uri.isNotBlank() -> android.net.Uri.parse(photo.uri)
+                else -> PhotoStore.findUri(applicationContext, photo.fileName)
+            }
             withContext(Dispatchers.Main) {
                 if (uri == null) {
                     toast("照片文件不存在（可能已在相册中删除）")
