@@ -186,6 +186,7 @@ class CountingService : android.app.Service() {
         val repository = repo
         val routingItemId = com.volumekey.counter.service.CountRouting.activeInventoryItemId.value
         val boardOpen = com.volumekey.counter.service.CountRouting.boardOpen.value
+        val galleryOpen = com.volumekey.counter.service.CountRouting.galleryOpen.value
         if (repository != null) {
             if (routingItemId != null) {
                 // 清单盘点条目激活：音量键计入该条目实盘数
@@ -196,8 +197,8 @@ class CountingService : android.app.Service() {
                         CounterRepository.INVENTORY_SOURCE_VOLUME
                     )
                 }
-            } else if (boardOpen) {
-                // 盘点板面可见但未选条目：与前台行为一致，忽略按键防误改普通计数器
+            } else if (boardOpen || galleryOpen) {
+                // 盘点板面/画廊可见但未选条目：与前台行为一致，忽略按键防误改普通计数器
             } else if (id > 0) {
                 serviceScope.launch {
                     repository.adjust(id, direction.toLong(), CounterRepository.SOURCE_POCKET)

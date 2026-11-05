@@ -11,4 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 object CountRouting {
     val activeInventoryItemId = MutableStateFlow<Long?>(null)
     val boardOpen = MutableStateFlow(false)
+    /** 画廊打开期间吞掉音量键，防误改背后的盘点条目 */
+    val galleryOpen = MutableStateFlow(false)
 }

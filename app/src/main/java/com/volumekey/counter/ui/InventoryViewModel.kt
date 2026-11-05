@@ -8,6 +8,9 @@ import com.volumekey.counter.data.AppDatabase
 import com.volumekey.counter.data.CounterRepository
 import com.volumekey.counter.data.InventoryItem
 import com.volumekey.counter.data.InventoryList
+import com.volumekey.counter.data.InventoryPhoto
+import com.volumekey.counter.util.PhotoStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,12 +22,14 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 清单筛选维度 */
 enum class InventoryFilter { ALL, UNTOUCHED, TOUCHED, DIFF }
 
 class InventoryViewModel(
-    private val repo: CounterRepository
+    private val repo: CounterRepository,
+    private val appContext: Context
 ) : ViewModel() {
 
     val lists: StateFlow<List<InventoryList>> = repo.observeInventoryLists()
@@ -135,6 +140,51 @@ class InventoryViewModel(
     fun markUntouched(itemId: Long) {
         viewModelScope.launch { repo.markInventoryItemUntouched(itemId) }
     }
+
+    // ---- 照片画廊 ----
+
+    /** 画廊当前条目（null=关闭） */
+    val galleryItemId = MutableStateFlow<Long?>(null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val galleryPhotos: StateFlow<List<InventoryPhoto>> = galleryItemId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyList())
+            else repo.observeInventoryPhotos(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun openGallery(itemId: Long) {
+        galleryItemId.value = itemId
+        // 对账：照片若已在系统相册被删，同步清掉登记记录，保证计数一致
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val records = repo.getInventoryPhotos(itemId)
+                records.forEach { r ->
+                    if (PhotoStore.findUri(appContext, r.fileName) == null) {
+                        repo.deleteInventoryPhotoRecord(r.id)
+                    }
+                }
+            }
+        }
+    }
+
+    fun closeGallery() {
+        galleryItemId.value = null
+    }
+
+    /** 删除一张：先删相册文件，再删登记记录（缩略图缓存失效） */
+    fun deletePhoto(photo: InventoryPhoto) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                PhotoStore.findUri(appContext, photo.fileName)?.let { uri ->
+                    PhotoStore.deleteByUri(appContext, uri)
+                }
+                PhotoStore.invalidateThumb(photo.fileName)
+                repo.deleteInventoryPhotoRecord(photo.id)
+            }
+        }
+    }
 }
 
 class InventoryViewModelFactory(context: Context) : ViewModelProvider.Factory {
@@ -143,7 +193,7 @@ class InventoryViewModelFactory(context: Context) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         val db = AppDatabase.getInstance(appContext)
-        val vm = InventoryViewModel(CounterRepository(db, db.counterDao()))
+        val vm = InventoryViewModel(CounterRepository(db, db.counterDao()), appContext)
         return vm as T
     }
 }

@@ -130,6 +130,18 @@ class MainActivity : ComponentActivity() {
 
     private fun startPhotoSessionInternal(item: com.volumekey.counter.data.InventoryItem) {
         photoSession = PhotoSession(item.id, item.name)
+        // 会话开始先对账：清理相册中已不存在文件的孤儿登记，
+        // 保证序号（MAX(seq)+1）与行内计数都基于真实照片
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                photoRepo.getInventoryPhotos(item.id).forEach { r ->
+                    if (PhotoStore.findUri(applicationContext, r.fileName) == null) {
+                        PhotoStore.invalidateThumb(r.fileName)
+                        photoRepo.deleteInventoryPhotoRecord(r.id)
+                    }
+                }
+            }
+        }
         toast("拍照取证：自动加水印（时间/经纬度/地址），可连拍多张，拍完按返回键结束")
         launchNextShot()
     }
@@ -168,13 +180,13 @@ class MainActivity : ComponentActivity() {
                 val timeStr = java.text.SimpleDateFormat(
                     "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()
                 ).format(java.util.Date(takenAt))
-                val lines = buildList {
-                    add("盘点取证：${s.itemName}")
+                val title = "盘点取证：${s.itemName}"
+                val infoLines = buildList {
                     add(timeStr)
                     add(if (fix != null) LocationSnapshot.formatLatLon(fix.lat, fix.lng) else "位置未获取")
                     fix?.address?.let { add(it) }
                 }
-                val r = PhotoStore.save(this@MainActivity, uri, seq, lines, fix?.lat, fix?.lng, takenAt, s.itemName)
+                val r = PhotoStore.save(this@MainActivity, uri, seq, title, infoLines, fix?.lat, fix?.lng, takenAt, s.itemName)
                 photoRepo.insertInventoryPhoto(
                     com.volumekey.counter.data.InventoryPhoto(
                         itemId = s.itemId, seq = seq, fileName = r.fileName,
@@ -205,6 +217,28 @@ class MainActivity : ComponentActivity() {
             if (s.saved > 0) "本次拍摄 ${s.saved} 张，已存入相册 Pictures/${PhotoStore.ALBUM_DIR}"
             else "未拍摄"
         )
+    }
+
+    /** 用系统查看器打开一张取证照片 */
+    private fun openPhotoViewer(photo: com.volumekey.counter.data.InventoryPhoto) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val uri = PhotoStore.findUri(applicationContext, photo.fileName)
+            withContext(Dispatchers.Main) {
+                if (uri == null) {
+                    toast("照片文件不存在（可能已在相册中删除）")
+                } else {
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "image/jpeg")
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                        toast("没有可用的看图应用")
+                    }
+                }
+            }
+        }
     }
 
     private fun handleImportCsv(uri: android.net.Uri) {
@@ -268,7 +302,8 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onExportClicked = ::exportInventory,
-                        onPhoto = ::startPhotoSession
+                        onPhoto = ::startPhotoSession,
+                        onOpenPhoto = ::openPhotoViewer
                     )
                 } else {
                     CounterScreen(
@@ -346,6 +381,9 @@ class MainActivity : ComponentActivity() {
     private fun routeVolumeKey(delta: Int, up: Boolean) {
         val invId = CountRouting.activeInventoryItemId.value
         when {
+            CountRouting.galleryOpen.value -> {
+                vibrateTick() // 画廊浏览中：忽略按键防误改
+            }
             invId != null -> {
                 vibrateTick()
                 inventoryViewModel.adjust(invId, delta, CounterRepository.INVENTORY_SOURCE_VOLUME)

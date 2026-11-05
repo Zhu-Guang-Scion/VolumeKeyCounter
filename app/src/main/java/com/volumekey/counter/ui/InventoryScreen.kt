@@ -3,6 +3,7 @@ package com.volumekey.counter.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,6 +55,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -70,7 +72,8 @@ fun InventoryScreen(
     onImportClicked: () -> Unit,
     onTemplateClicked: () -> Unit,
     onExportClicked: () -> Unit,
-    onPhoto: (com.volumekey.counter.data.InventoryItem) -> Unit
+    onPhoto: (com.volumekey.counter.data.InventoryItem) -> Unit,
+    onOpenPhoto: (com.volumekey.counter.data.InventoryPhoto) -> Unit
 ) {
     val lists by vm.lists.collectAsState()
     val items by vm.items.collectAsState()
@@ -79,6 +82,8 @@ fun InventoryScreen(
     val currentFilter by vm.filter.collectAsState()
     val photoCounts by vm.photoCounts.collectAsState()
     val search by vm.searchQuery.collectAsState()
+    val galleryItemId by vm.galleryItemId.collectAsState()
+    val galleryPhotos by vm.galleryPhotos.collectAsState()
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var countingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var deleteListConfirm by rememberSaveable { mutableStateOf(false) }
@@ -254,7 +259,8 @@ fun InventoryScreen(
                             photoCount = photoCounts[item.id] ?: 0,
                             onCount = { countingItem = item },
                             onEdit = { editingItem = item },
-                            onPhoto = { onPhoto(item) }
+                            onPhoto = { onPhoto(item) },
+                            onOpenGallery = { vm.openGallery(item.id) }
                         )
                         HorizontalDivider()
                     }
@@ -288,6 +294,16 @@ fun InventoryScreen(
             onNext = { nextUntouched?.let { countingItem = it } },
             hasNext = nextUntouched != null,
             onPhoto = { onPhoto(live) }
+        )
+    }
+
+    // 照片画廊覆盖层
+    if (galleryItemId != null) {
+        PhotoGalleryOverlay(
+            photos = galleryPhotos,
+            onOpen = onOpenPhoto,
+            onDelete = { vm.deletePhoto(it) },
+            onDismiss = { vm.closeGallery() }
         )
     }
     } // Box end
@@ -355,7 +371,8 @@ private fun InventoryRow(
     photoCount: Int,
     onCount: () -> Unit,
     onEdit: () -> Unit,
-    onPhoto: () -> Unit
+    onPhoto: () -> Unit,
+    onOpenGallery: () -> Unit
 ) {
     val diff = item.countedQty - item.expectedQty
     val diffColor = when {
@@ -399,11 +416,31 @@ private fun InventoryRow(
                     color = diffColor
                 )
                 if (photoCount > 0) {
-                    Text(
-                        "📷 已拍 $photoCount 张",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .clickable(onClick = onOpenGallery)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.PhotoCamera,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.height(14.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "已拍 $photoCount 张 · 查看",
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
                 }
                 if (item.remark.isNotBlank()) {
                     Text(
@@ -652,5 +689,153 @@ private fun EditItemDialog(
                 TextButton(onClick = { confirmUntouched = false }) { Text("取消") }
             }
         )
+    }
+}
+
+/** 照片画廊覆盖层：3 列缩略图网格，点开调系统查看器，可删除单张 */
+@Composable
+private fun PhotoGalleryOverlay(
+    photos: List<com.volumekey.counter.data.InventoryPhoto>,
+    onOpen: (com.volumekey.counter.data.InventoryPhoto) -> Unit,
+    onDelete: (com.volumekey.counter.data.InventoryPhoto) -> Unit,
+    onDismiss: () -> Unit
+) {
+    DisposableEffect(Unit) {
+        CountRouting.galleryOpen.value = true
+        onDispose { CountRouting.galleryOpen.value = false }
+    }
+    BackHandler { onDismiss() }
+    var deleteTarget by remember { mutableStateOf<com.volumekey.counter.data.InventoryPhoto?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+
+    Surface(
+        Modifier
+            .fillMaxSize()
+            .padding(14.dp),
+        shape = MaterialTheme.shapes.large,
+        shadowElevation = 8.dp,
+        tonalElevation = 6.dp
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "取证照片（${photos.size} 张）",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "关闭画廊")
+                }
+            }
+            Text(
+                "点照片查看大图 · 点右上角垃圾桶删除（删除后计数自动更新）",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            if (photos.isEmpty()) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("暂无照片", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(photos.size) { i ->
+                        val p = photos[i]
+                        Card(
+                            Modifier
+                                .padding(4.dp)
+                                .clickable(onClick = { onOpen(p) })
+                        ) {
+                            Column {
+                                ThumbImage(fileName = p.fileName, ctx = ctx)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 6.dp, end = 2.dp, top = 2.dp, bottom = 2.dp)
+                                ) {
+                                    Text(
+                                        "#${p.seq}",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { deleteTarget = p },
+                                        modifier = Modifier.height(30.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Delete,
+                                            contentDescription = "删除照片",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.height(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    deleteTarget?.let { p ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除照片") },
+            text = { Text("确定删除「${p.fileName}」？相册文件与登记记录将一并删除。") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(p); deleteTarget = null }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
+        )
+    }
+}
+
+/** 缩略图：IO 线程解码 + LruCache，点击回调由外层处理 */
+@Composable
+private fun ThumbImage(fileName: String, ctx: android.content.Context) {
+    var bmp by remember(fileName) {
+        mutableStateOf<android.graphics.Bitmap?>(null)
+    }
+    LaunchedEffect(fileName) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            bmp = com.volumekey.counter.util.PhotoStore.loadThumbnail(ctx, fileName)
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(108.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        val b = bmp
+        if (b != null) {
+            androidx.compose.foundation.Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = fileName,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                Icons.Filled.PhotoCamera,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

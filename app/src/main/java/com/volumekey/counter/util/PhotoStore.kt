@@ -27,7 +27,8 @@ object PhotoStore {
         context: Context,
         tmpUri: Uri,
         itemSeq: Int,
-        watermarkLines: List<String>,
+        watermarkTitle: String,
+        watermarkInfoLines: List<String>,
         lat: Double?,
         lng: Double?,
         takenAt: Long,
@@ -47,7 +48,7 @@ object PhotoStore {
         val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
             ?: throw IllegalStateException("照片解码失败")
         val orientation = WatermarkPainter.exifOrientation(bytes)
-        val marked = WatermarkPainter.apply(src, orientation, watermarkLines)
+        val marked = WatermarkPainter.apply(src, orientation, watermarkTitle, watermarkInfoLines)
         if (marked !== src) src.recycle()
 
         // 3) 相册目录 + 文件名
@@ -110,5 +111,59 @@ object PhotoStore {
             marked.recycle()
         }
         return SaveResult(fileName)
+    }
+
+    // ---- 相册查询 / 缩略图 / 删除 ----
+
+    /** 在 盘点取证 相册中按文件名找 MediaStore URI（找不到返回 null，可能是被用户在相册删除） */
+    fun findUri(context: Context, displayName: String): Uri? = try {
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        context.contentResolver.query(
+            collection,
+            arrayOf(MediaStore.Images.Media._ID),
+            "${MediaStore.Images.Media.DISPLAY_NAME} = ?",
+            arrayOf(displayName),
+            null
+        )?.use { c ->
+            if (c.moveToFirst()) {
+                val id = c.getLong(0)
+                Uri.withAppendedPath(collection, id.toString())
+            } else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    fun deleteByUri(context: Context, uri: Uri): Boolean = try {
+        context.contentResolver.delete(uri, null, null) > 0
+    } catch (_: Exception) {
+        false
+    }
+
+    private val thumbCache = android.util.LruCache<String, Bitmap>(48)
+
+    /** 加载缩略图（长边约 320px，LruCache 缓存，IO 线程调用） */
+    fun loadThumbnail(context: Context, displayName: String): Bitmap? {
+        val key = "th_$displayName"
+        thumbCache.get(key)?.let { return it }
+        val uri = findUri(context, displayName) ?: return null
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 320) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        if (bmp != null) thumbCache.put(key, bmp)
+        return bmp
+    }
+
+    /** 使缩略图缓存失效（删除照片后调用） */
+    fun invalidateThumb(displayName: String) {
+        thumbCache.remove("th_$displayName")
     }
 }

@@ -108,6 +108,15 @@ interface CounterDao {
 
     @Query("SELECT itemId, COUNT(*) AS cnt FROM inventory_photos WHERE itemId IN (SELECT id FROM inventory_items WHERE listId = :listId) GROUP BY itemId")
     fun observeInventoryPhotoCounts(listId: Long): Flow<List<ItemPhotoCount>>
+
+    @Query("SELECT * FROM inventory_photos WHERE itemId = :itemId ORDER BY seq ASC, id ASC")
+    fun observeInventoryPhotos(itemId: Long): Flow<List<InventoryPhoto>>
+
+    @Query("SELECT * FROM inventory_photos WHERE itemId = :itemId ORDER BY seq ASC, id ASC")
+    suspend fun getInventoryPhotos(itemId: Long): List<InventoryPhoto>
+
+    @Query("DELETE FROM inventory_photos WHERE id = :photoId")
+    suspend fun deleteInventoryPhoto(photoId: Long)
 }
 
 data class ItemPhotoCount(val itemId: Long, val cnt: Int)

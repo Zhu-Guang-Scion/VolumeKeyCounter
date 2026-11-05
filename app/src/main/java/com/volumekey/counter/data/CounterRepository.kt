@@ -155,6 +155,12 @@ class CounterRepository(
 
     suspend fun insertInventoryPhoto(photo: InventoryPhoto): Long = dao.insertInventoryPhoto(photo)
 
+    fun observeInventoryPhotos(itemId: Long) = dao.observeInventoryPhotos(itemId)
+
+    suspend fun getInventoryPhotos(itemId: Long) = dao.getInventoryPhotos(itemId)
+
+    suspend fun deleteInventoryPhotoRecord(photoId: Long) = dao.deleteInventoryPhoto(photoId)
+
     companion object {
         const val SOURCE_VOLUME_UP = "volume_up"
         const val SOURCE_VOLUME_DOWN = "volume_down"
