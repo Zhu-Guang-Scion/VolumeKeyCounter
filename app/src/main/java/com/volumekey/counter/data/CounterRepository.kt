@@ -147,6 +147,14 @@ class CounterRepository(
 
     suspend fun getInventoryEventsOfList(listId: Long) = dao.getInventoryEventsOfList(listId)
 
+    // ---- 水印相机 ----
+
+    fun observeInventoryPhotoCounts(listId: Long) = dao.observeInventoryPhotoCounts(listId)
+
+    suspend fun nextPhotoSeq(itemId: Long): Int = dao.maxPhotoSeq(itemId) + 1
+
+    suspend fun insertInventoryPhoto(photo: InventoryPhoto): Long = dao.insertInventoryPhoto(photo)
+
     companion object {
         const val SOURCE_VOLUME_UP = "volume_up"
         const val SOURCE_VOLUME_DOWN = "volume_down"

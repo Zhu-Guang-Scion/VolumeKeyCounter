@@ -96,3 +96,25 @@ data class InventoryEvent(
     val timestamp: Long = System.currentTimeMillis(),
     val source: String // volume / screen / manual
 )
+
+/** 清单盘点：水印相机拍摄记录（照片存系统相册 Pictures/盘点取证，此处登记元数据与序号） */
+@Entity(
+    tableName = "inventory_photos",
+    foreignKeys = [ForeignKey(
+        entity = InventoryItem::class,
+        parentColumns = ["id"],
+        childColumns = ["itemId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [Index("itemId")]
+)
+data class InventoryPhoto(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val itemId: Long,
+    val seq: Int,
+    val fileName: String,
+    val takenAt: Long = System.currentTimeMillis(),
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val address: String? = null
+)

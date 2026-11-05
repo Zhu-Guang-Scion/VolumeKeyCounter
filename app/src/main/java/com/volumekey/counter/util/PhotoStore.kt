@@ -1,0 +1,114 @@
+package com.volumekey.counter.util
+
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.exifinterface.media.ExifInterface
+import java.io.File
+
+/**
+ * 水印照片落盘：从系统相机写满的临时 URI 解码（采样防 OOM + EXIF 转正）→
+ * 绘制水印 → 存入系统相册 Pictures/盘点取证/，命名 盘点对象名-序号.jpg，
+ * 并回写 EXIF（拍摄时间 + GPS 坐标）供审计溯源。
+ */
+object PhotoStore {
+
+    private const val MAX_EDGE = 2560
+    const val ALBUM_DIR = "盘点取证"
+
+    data class SaveResult(val fileName: String)
+
+    fun save(
+        context: Context,
+        tmpUri: Uri,
+        itemSeq: Int,
+        watermarkLines: List<String>,
+        lat: Double?,
+        lng: Double?,
+        takenAt: Long,
+        itemName: String
+    ): SaveResult {
+        // 1) 读字节（相机已把照片写入我们 FileProvider 的临时文件）
+        val bytes = context.contentResolver.openInputStream(tmpUri)?.use { it.readBytes() }
+            ?: throw IllegalStateException("无法读取拍摄结果")
+        if (bytes.size < 1024) throw IllegalStateException("拍摄结果异常（文件过小，可能被相机取消）")
+
+        // 2) 采样解码（防 OOM）+ EXIF 转正 + 水印
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        var sample = 1
+        while (maxOf(opts.outWidth, opts.outHeight) / sample > MAX_EDGE) sample *= 2
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
+            ?: throw IllegalStateException("照片解码失败")
+        val orientation = WatermarkPainter.exifOrientation(bytes)
+        val marked = WatermarkPainter.apply(src, orientation, watermarkLines)
+        if (marked !== src) src.recycle()
+
+        // 3) 相册目录 + 文件名
+        val safeName = itemName.replace(Regex("[\\\\/:*?\"<>|\\s]"), "_").ifBlank { "盘点对象" }
+        val fileName = "${safeName}-$itemSeq.jpg"
+
+        // 4) 写入 MediaStore
+        val resolver = context.contentResolver
+        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + ALBUM_DIR)
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            } else {
+                val dir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    ALBUM_DIR
+                )
+                dir.mkdirs()
+                put(MediaStore.Images.Media.DATA, File(dir, fileName).absolutePath)
+            }
+        }
+        val outUri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("无法创建相册条目")
+        try {
+            // 先压到缓存文件，便于经 ExifInterface(String) 回写 EXIF（时间/GPS）
+            val tmpOut = File(context.cacheDir, "wm_out_${System.currentTimeMillis()}.jpg")
+            try {
+                tmpOut.outputStream().use { os -> marked.compress(Bitmap.CompressFormat.JPEG, 92, os) }
+                try {
+                    val exif = ExifInterface(tmpOut.absolutePath)
+                    val fmt = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+                    exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, fmt.format(java.util.Date(takenAt)))
+                    exif.setAttribute(ExifInterface.TAG_DATETIME, fmt.format(java.util.Date(takenAt)))
+                    if (lat != null && lng != null) exif.setLatLong(lat, lng)
+                    exif.saveAttributes()
+                } catch (_: Exception) {
+                    // EXIF 失败不影响成片
+                }
+                resolver.openOutputStream(outUri)?.use { os -> os.write(tmpOut.readBytes()) }
+                    ?: throw IllegalStateException("无法写入照片")
+            } finally {
+                runCatching { tmpOut.delete() }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(outUri, values, null, null)
+            }
+        } catch (e: Exception) {
+            runCatching { resolver.delete(outUri, null, null) }
+            throw e
+        } finally {
+            marked.recycle()
+        }
+        return SaveResult(fileName)
+    }
+}

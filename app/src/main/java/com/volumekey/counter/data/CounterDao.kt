@@ -97,4 +97,17 @@ interface CounterDao {
 
     @Query("SELECT * FROM inventory_events WHERE itemId IN (SELECT id FROM inventory_items WHERE listId = :listId) ORDER BY timestamp ASC, id ASC")
     suspend fun getInventoryEventsOfList(listId: Long): List<InventoryEvent>
+
+    // ---- 水印相机 ----
+
+    @Insert
+    suspend fun insertInventoryPhoto(photo: InventoryPhoto): Long
+
+    @Query("SELECT IFNULL(MAX(seq), 0) FROM inventory_photos WHERE itemId = :itemId")
+    suspend fun maxPhotoSeq(itemId: Long): Int
+
+    @Query("SELECT itemId, COUNT(*) AS cnt FROM inventory_photos WHERE itemId IN (SELECT id FROM inventory_items WHERE listId = :listId) GROUP BY itemId")
+    fun observeInventoryPhotoCounts(listId: Long): Flow<List<ItemPhotoCount>>
 }
+
+data class ItemPhotoCount(val itemId: Long, val cnt: Int)
