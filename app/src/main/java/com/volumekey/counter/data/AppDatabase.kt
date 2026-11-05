@@ -8,9 +8,10 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [
         Counter::class, Checkpoint::class, CountEvent::class,
-        InventoryList::class, InventoryItem::class, InventoryEvent::class
+        InventoryList::class, InventoryItem::class, InventoryEvent::class,
+        InventoryPhoto::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -64,6 +65,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `inventory_photos` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`itemId` INTEGER NOT NULL, " +
+                        "`seq` INTEGER NOT NULL, " +
+                        "`fileName` TEXT NOT NULL, " +
+                        "`takenAt` INTEGER NOT NULL, " +
+                        "`lat` REAL, " +
+                        "`lng` REAL, " +
+                        "`address` TEXT, " +
+                        "FOREIGN KEY(`itemId`) REFERENCES `inventory_items`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_inventory_photos_itemId` ON `inventory_photos` (`itemId`)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -71,7 +91,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "volume_counter.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

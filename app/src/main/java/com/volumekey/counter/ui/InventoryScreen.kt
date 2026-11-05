@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.AlertDialog
@@ -68,13 +69,15 @@ fun InventoryScreen(
     onClose: () -> Unit,
     onImportClicked: () -> Unit,
     onTemplateClicked: () -> Unit,
-    onExportClicked: () -> Unit
+    onExportClicked: () -> Unit,
+    onPhoto: (com.volumekey.counter.data.InventoryItem) -> Unit
 ) {
     val lists by vm.lists.collectAsState()
     val items by vm.items.collectAsState()
     val summary by vm.summary.collectAsState()
     val activeListId by vm.activeListId.collectAsState()
     val currentFilter by vm.filter.collectAsState()
+    val photoCounts by vm.photoCounts.collectAsState()
     val search by vm.searchQuery.collectAsState()
     var editingItem by remember { mutableStateOf<InventoryItem?>(null) }
     var countingItem by remember { mutableStateOf<InventoryItem?>(null) }
@@ -248,8 +251,10 @@ fun InventoryScreen(
                     items(items, key = { it.id }) { item ->
                         InventoryRow(
                             item = item,
+                            photoCount = photoCounts[item.id] ?: 0,
                             onCount = { countingItem = item },
-                            onEdit = { editingItem = item }
+                            onEdit = { editingItem = item },
+                            onPhoto = { onPhoto(item) }
                         )
                         HorizontalDivider()
                     }
@@ -276,11 +281,13 @@ fun InventoryScreen(
             ?: items.take(idx).firstOrNull { !it.touched }
         ItemCountingOverlay(
             item = live,
+            photoCount = photoCounts[live.id] ?: 0,
             onAdjust = { vm.adjust(live.id, it, com.volumekey.counter.data.CounterRepository.INVENTORY_SOURCE_SCREEN) },
             onEdit = { editingItem = live },
             onDismiss = { countingItem = null },
             onNext = { nextUntouched?.let { countingItem = it } },
-            hasNext = nextUntouched != null
+            hasNext = nextUntouched != null,
+            onPhoto = { onPhoto(live) }
         )
     }
     } // Box end
@@ -345,8 +352,10 @@ fun InventoryScreen(
 @Composable
 private fun InventoryRow(
     item: InventoryItem,
+    photoCount: Int,
     onCount: () -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    onPhoto: () -> Unit
 ) {
     val diff = item.countedQty - item.expectedQty
     val diffColor = when {
@@ -389,6 +398,13 @@ private fun InventoryRow(
                     fontSize = 16.sp,
                     color = diffColor
                 )
+                if (photoCount > 0) {
+                    Text(
+                        "📷 已拍 $photoCount 张",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (item.remark.isNotBlank()) {
                     Text(
                         "备注：${item.remark}",
@@ -409,6 +425,13 @@ private fun InventoryRow(
                 )
                 Text("实盘（点改）", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            IconButton(onClick = onPhoto) {
+                Icon(
+                    Icons.Filled.PhotoCamera,
+                    contentDescription = "拍照取证",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
         }
     }
 }
@@ -417,11 +440,13 @@ private fun InventoryRow(
 @Composable
 private fun ItemCountingOverlay(
     item: InventoryItem,
+    photoCount: Int,
     onAdjust: (Int) -> Unit,
     onEdit: () -> Unit,
     onDismiss: () -> Unit,
     onNext: () -> Unit,
-    hasNext: Boolean
+    hasNext: Boolean,
+    onPhoto: () -> Unit
 ) {
     // 激活音量键路由到本条目
     DisposableEffect(item.id) {
@@ -510,6 +535,24 @@ private fun ItemCountingOverlay(
                             .weight(1f)
                             .height(64.dp)
                     ) { Text("+ 1", fontSize = 22.sp) }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onPhoto,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.PhotoCamera,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (photoCount > 0) "拍照取证（已拍 $photoCount 张）" else "拍照取证（时间/位置水印）",
+                        fontSize = 17.sp
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth()) {

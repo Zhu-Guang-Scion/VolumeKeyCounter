@@ -88,6 +88,17 @@ class InventoryViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Summary(0, 0, 0))
 
+    /** 各条目已拍水印照片数（itemId -> count） */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val photoCounts: StateFlow<Map<Long, Int>> = activeListId
+        .flatMapLatest { id ->
+            if (id == null) flowOf(emptyMap())
+            else repo.observeInventoryPhotoCounts(id).map { rows ->
+                rows.associate { it.itemId to it.cnt }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     fun selectList(id: Long) {
         activeListId.value = id
     }

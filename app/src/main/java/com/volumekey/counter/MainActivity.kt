@@ -48,6 +48,8 @@ import com.volumekey.counter.ui.InventoryViewModelFactory
 import com.volumekey.counter.ui.theme.VolumeCounterTheme
 import com.volumekey.counter.util.CsvExporter
 import com.volumekey.counter.util.InventoryImporter
+import com.volumekey.counter.util.LocationSnapshot
+import com.volumekey.counter.util.PhotoStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -79,6 +81,131 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) handleImportCsv(uri)
         }
+
+    // ---- 水印相机会话（系统相机循环连拍，每张独立水印） ----
+
+    private class PhotoSession(val itemId: Long, val itemName: String) {
+        var saved = 0
+    }
+
+    private var photoSession: PhotoSession? = null
+    private var pendingPhotoItem: com.volumekey.counter.data.InventoryItem? = null
+    private var cameraTmpUri: android.net.Uri? = null
+
+    private val photoRepo by lazy {
+        val db = AppDatabase.getInstance(applicationContext)
+        CounterRepository(db, db.counterDao())
+    }
+
+    private val takePictureLauncher =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            handleShotResult(ok)
+        }
+
+    private val locationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            // 无论是否授权都开拍：未授权时水印省略位置行
+            val item = pendingPhotoItem
+            pendingPhotoItem = null
+            if (item != null) startPhotoSessionInternal(item)
+        }
+
+    fun startPhotoSession(item: com.volumekey.counter.data.InventoryItem) {
+        val fine = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!fine && !coarse) {
+            pendingPhotoItem = item
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        } else {
+            startPhotoSessionInternal(item)
+        }
+    }
+
+    private fun startPhotoSessionInternal(item: com.volumekey.counter.data.InventoryItem) {
+        photoSession = PhotoSession(item.id, item.name)
+        toast("拍照取证：自动加水印（时间/经纬度/地址），可连拍多张，拍完按返回键结束")
+        launchNextShot()
+    }
+
+    private fun launchNextShot() {
+        try {
+            val dir = java.io.File(cacheDir, "camera_tmp").apply { mkdirs() }
+            val tmp = java.io.File(dir, "shot_${System.currentTimeMillis()}.jpg")
+            cameraTmpUri = androidx.core.content.FileProvider.getUriForFile(
+                this, "$packageName.fileprovider", tmp
+            )
+            takePictureLauncher.launch(cameraTmpUri!!)
+        } catch (e: Exception) {
+            toast("无法启动相机：${e.message}")
+            endPhotoSession()
+        }
+    }
+
+    private fun handleShotResult(ok: Boolean) {
+        val s = photoSession ?: return
+        if (!ok) {
+            endPhotoSession()
+            return
+        }
+        val uri = cameraTmpUri
+        if (uri == null) {
+            endPhotoSession()
+            return
+        }
+        toast("处理水印中…")
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val fix = LocationSnapshot.bestFix(this@MainActivity)
+                val takenAt = System.currentTimeMillis()
+                val seq = photoRepo.nextPhotoSeq(s.itemId)
+                val timeStr = java.text.SimpleDateFormat(
+                    "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()
+                ).format(java.util.Date(takenAt))
+                val lines = buildList {
+                    add("盘点取证：${s.itemName}")
+                    add(timeStr)
+                    add(if (fix != null) LocationSnapshot.formatLatLon(fix.lat, fix.lng) else "位置未获取")
+                    fix?.address?.let { add(it) }
+                }
+                val r = PhotoStore.save(this@MainActivity, uri, seq, lines, fix?.lat, fix?.lng, takenAt, s.itemName)
+                photoRepo.insertInventoryPhoto(
+                    com.volumekey.counter.data.InventoryPhoto(
+                        itemId = s.itemId, seq = seq, fileName = r.fileName,
+                        takenAt = takenAt, lat = fix?.lat, lng = fix?.lng, address = fix?.address
+                    )
+                )
+                s.saved++
+                runCatching { contentResolver.delete(uri, null, null) } // 清理临时文件
+                withContext(Dispatchers.Main) {
+                    toast("已保存 ${r.fileName}，可继续拍摄")
+                    // 部分 OEM 相机会吞掉紧连的第二次启动，延迟 400ms 再拉起下一张
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ launchNextShot() }, 400)
+                }
+            } catch (e: Exception) {
+                runCatching { contentResolver.delete(uri, null, null) }
+                withContext(Dispatchers.Main) {
+                    toast("本张处理失败：${e.message}")
+                    endPhotoSession()
+                }
+            }
+        }
+    }
+
+    private fun endPhotoSession() {
+        val s = photoSession ?: return
+        photoSession = null
+        toast(
+            if (s.saved > 0) "本次拍摄 ${s.saved} 张，已存入相册 Pictures/${PhotoStore.ALBUM_DIR}"
+            else "未拍摄"
+        )
+    }
 
     private fun handleImportCsv(uri: android.net.Uri) {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -140,7 +267,8 @@ class MainActivity : ComponentActivity() {
                                 toast(if (ok) "已生成模板并通过分享发出" else "模板生成失败")
                             }
                         },
-                        onExportClicked = ::exportInventory
+                        onExportClicked = ::exportInventory,
+                        onPhoto = ::startPhotoSession
                     )
                 } else {
                     CounterScreen(
