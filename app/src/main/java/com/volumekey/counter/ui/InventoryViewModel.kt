@@ -179,6 +179,7 @@ class InventoryViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 PhotoStore.deleteByUri(appContext, photo.uri, photo.fileName)
+                PhotoStore.deletePrivateThumb(appContext, photo.fileName)
                 PhotoStore.invalidateThumb(photo.fileName)
                 repo.deleteInventoryPhotoRecord(photo.id)
             }

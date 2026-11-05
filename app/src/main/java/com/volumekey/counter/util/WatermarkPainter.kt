@@ -48,13 +48,12 @@ object WatermarkPainter {
             color = Color.argb(245, 255, 255, 255)
             textSize = infoPx
         }
-        val accentPaint = Paint().apply { color = ACCENT_COLOR }
         val dividerPaint = Paint().apply { color = Color.argb(80, 255, 255, 255) }
 
         val titleW = titlePaint.measureText(title)
         val infoW = if (infoLines.isEmpty()) 0f else infoLines.maxOf { infoPaint.measureText(it) }
         val contentW = maxOf(titleW, infoW)
-        val textLeft = pad + accentW + pad * 0.6f
+        val textLeft = pad
         val blockW = textLeft + contentW + pad
         val blockH = pad * 2 +
             titlePx * 0.9f + dividerGap * 2 + infoPx * 0.35f +
@@ -75,11 +74,6 @@ object WatermarkPainter {
             )
         }
         canvas.drawRoundRect(left, top, left + blockW, top + blockH, infoPx * 0.4f, infoPx * 0.4f, bgPaint)
-        // 彩色竖条
-        canvas.drawRoundRect(
-            left + pad, top + pad * 0.7f, left + pad + accentW, top + blockH - pad * 0.7f,
-            accentW / 2f, accentW / 2f, accentPaint
-        )
         // 标题
         var baseline = top + pad + titlePx * 0.78f
         canvas.drawText(title, textLeft, baseline, titlePaint)

@@ -23,6 +23,34 @@ object PhotoStore {
 
     data class SaveResult(val fileName: String, val uri: String)
 
+    private fun thumbDir(context: Context): File =
+        File(context.filesDir, "thumbs").apply { mkdirs() }
+
+    private fun thumbFile(context: Context, fileName: String): File =
+        File(thumbDir(context), fileName)
+
+    /** 保存时同时写一份小缩略图到 App 私有目录（绕开 MediaStore 兼容性问题） */
+    private fun savePrivateThumb(context: Context, bitmap: Bitmap, fileName: String) {
+        runCatching {
+            val scale = 320f / maxOf(bitmap.width, bitmap.height).coerceAtLeast(1)
+            val tw = (bitmap.width * scale).toInt().coerceAtLeast(1)
+            val th = (bitmap.height * scale).toInt().coerceAtLeast(1)
+            val thumb = Bitmap.createScaledBitmap(bitmap, tw, th, true)
+            thumbFile(context, fileName).outputStream().use { thumb.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+            if (thumb !== bitmap) thumb.recycle()
+        }
+    }
+
+    /** 从 App 私有目录加载缩略图（100% 可读，不走 MediaStore） */
+    fun loadPrivateThumb(context: Context, fileName: String): Bitmap? = runCatching {
+        val f = thumbFile(context, fileName)
+        if (f.exists() && f.length() > 0) BitmapFactory.decodeFile(f.absolutePath) else null
+    }.getOrNull()
+
+    fun deletePrivateThumb(context: Context, fileName: String) {
+        runCatching { thumbFile(context, fileName).delete() }
+    }
+
     fun save(
         context: Context,
         tmpUri: Uri,
@@ -108,6 +136,8 @@ object PhotoStore {
             runCatching { resolver.delete(outUri, null, null) }
             throw e
         } finally {
+            // 在 recycle 前保存私有缩略图
+            savePrivateThumb(context, marked, fileName)
             marked.recycle()
         }
         // 回读系统实际登记的文件名——若同名陈旧行导致系统自动改名为 "xxx (1).jpg"，
@@ -178,10 +208,16 @@ object PhotoStore {
 
     private val thumbCache = android.util.LruCache<String, Bitmap>(48)
 
-    /** 加载缩略图：优先用存储的 content URI，退化到按名查询；长边约 320px，LruCache 缓存，IO 线程调用 */
+    /** 加载缩略图：优先 App 私有目录（100% 可读），退化到存储的 content URI → 按名查询 */
     fun loadThumbnail(context: Context, uriString: String, displayName: String): Bitmap? = runCatching {
         val key = "th_$displayName"
         thumbCache.get(key)?.let { return it }
+        // 1) App 私有目录（最可靠）
+        loadPrivateThumb(context, displayName)?.let {
+            thumbCache.put(key, it)
+            return it
+        }
+        // 2) 存储的 content URI
         val uri: Uri = when {
             uriString.isNotBlank() -> Uri.parse(uriString)
             else -> findUri(context, displayName) ?: return null
